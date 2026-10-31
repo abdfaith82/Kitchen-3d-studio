@@ -1,0 +1,6 @@
+{
+  "name": "Kitchen3D Studio",
+  "description": "Offline 3D Kitchen Design Studio & CAD planner featuring computational geometry, smart 1mm snapping, and dynamic room architectural editing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
