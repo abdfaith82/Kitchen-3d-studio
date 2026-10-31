@@ -21,8 +21,19 @@ jobs:
         java-version: '17'
         cache: 'gradle'
 
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+
+    - name: Generate Gradle Wrapper
+      run: gradle wrapper
+
     - name: Grant Execute Permission to Gradlew
       run: chmod +x ./gradlew
+
+    # Generates the missing debug.keystore expected by your debugConfig
+    - name: Generate Debug Keystore
+      run: |
+        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 
     - name: Build Debug APK
       run: ./gradlew assembleDebug
@@ -31,4 +42,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: kitchen-studio-debug-apk
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: |
+          **/build/outputs/apk/debug/*.apk
