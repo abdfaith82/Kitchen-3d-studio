@@ -985,8 +985,301 @@ class KitchenStudioEngineTest {
         assertEquals(720f, convertedFromMesh.dimensions.y, 1.0f)
         assertEquals(350f, convertedFromMesh.dimensions.z, 1.0f)
     }
+
+    @Test
+    fun testPeriodicRoomAutoSaveChecksumAndCameraScanEngine() {
+        val room = RoomStructure(widthMm = 4200f, depthMm = 3600f, heightMm = 2700f)
+        val elem1 = KitchenElement(
+            id = "cab_1",
+            name = "خزانة سفلية 1",
+            type = KitchenElementType.BASE_DOUBLE_DOOR,
+            position = Vector3(1000f, 0f, 300f),
+            dimensions = Vector3(900f, 850f, 600f)
+        )
+        val project1 = com.example.domain.repository.KitchenProject(
+            id = "proj_autosave_test",
+            name = "مشروع حفظ تلقائي",
+            room = room,
+            elements = listOf(elem1)
+        )
+        val crcInitial = com.example.data.local.autosave.ProjectAutoSaveManager.computeStateChecksum(project1)
+
+        // Moving cabinet by 50mm changes the deterministic CRC32 checksum so periodic auto-save detects dirty state
+        val projectMoved = project1.copy(
+            elements = listOf(elem1.copy(position = Vector3(1050f, 0f, 300f)))
+        )
+        val crcMoved = com.example.data.local.autosave.ProjectAutoSaveManager.computeStateChecksum(projectMoved)
+        assertNotEquals("CRC32 checksum must change when element moves", crcInitial, crcMoved)
+
+        // Verify AutoSaveUiState defaults include live countdown
+        val uiState = com.example.data.local.autosave.AutoSaveUiState()
+        assertTrue(uiState.isEnabled)
+        assertEquals(15, uiState.intervalSeconds)
+        assertEquals(15, uiState.secondsUntilNextSave)
+    }
+
+    @Test
+    fun testArchViz3DVisualizationAndPromptEngine() {
+        val room = RoomStructure(widthMm = 4200f, depthMm = 3600f, heightMm = 2700f)
+        val elem1 = KitchenElement(
+            id = "cab_oak_1",
+            name = "خزانة بلوط طبيعي",
+            type = KitchenElementType.BASE_DOUBLE_DOOR,
+            position = Vector3(1200f, 0f, 300f),
+            dimensions = Vector3(900f, 850f, 600f)
+        )
+        val project = com.example.domain.repository.KitchenProject(
+            id = "proj_archviz",
+            name = "مشروع رندر معماري",
+            room = room,
+            elements = listOf(elem1)
+        )
+
+        // Verify all 4 real-time ArchViz 3D Viewport modes exist
+        val modes = com.example.presentation.ui.ArchVizRenderMode.entries
+        assertEquals(4, modes.size)
+
+        // Verify 4-stage ArchVizPromptEngine JSON payload generation
+        val payload = com.example.core.filament.ArchVizPromptEngine.generateRenderPayload(
+            project = project,
+            focalLengthMm = 24,
+            apertureFStop = 8.0f
+        )
+        assertTrue(payload.positivePrompt.contains("24mm architectural tilt-shift lens"))
+        assertTrue(payload.positivePrompt.endsWith("photorealistic, raw photo, 8k resolution, ArchViz, Unreal Engine 5, V-Ray render, high surface imperfections"))
+        assertEquals("canny_or_mlsd", payload.controlNetSettings.preprocessor)
+
+        val formattedJson = payload.jsonString
+        assertTrue(formattedJson.contains("\"positive_prompt\""))
+        assertTrue(formattedJson.contains("\"controlnet_settings\""))
+    }
+
+    @Test
+    fun testUnitSystemSmartAccessoriesAndDoorClearanceValidation() {
+        // 1. Test MeasurementUnitSystem (Metric vs Imperial)
+        val metricFormatted = com.example.core.units.MeasurementUnitSystem.formatLength(
+            900f,
+            com.example.core.units.MeasurementUnitSystem.METRIC
+        )
+        val imperialFormatted = com.example.core.units.MeasurementUnitSystem.formatLength(
+            900f,
+            com.example.core.units.MeasurementUnitSystem.IMPERIAL
+        )
+        assertTrue(metricFormatted.contains("90") || metricFormatted.contains("900"))
+        assertTrue(imperialFormatted.contains("\"") || imperialFormatted.contains("'"))
+
+        val areaMetric = com.example.core.units.MeasurementUnitSystem.formatArea(
+            2.5f,
+            com.example.core.units.MeasurementUnitSystem.METRIC
+        )
+        val areaImperial = com.example.core.units.MeasurementUnitSystem.formatArea(
+            2.5f,
+            com.example.core.units.MeasurementUnitSystem.IMPERIAL
+        )
+        assertTrue(areaMetric.contains("م²"))
+        assertTrue(areaImperial.contains("sq.ft"))
+
+        // 2. Test SmartAccessoryMatcher auto-matching & BOM cost calculation
+        val cornerCabinet = KitchenElement(
+            id = "cab_corner_1",
+            name = "خزانة زاوية سفلي",
+            type = KitchenElementType.BASE_CORNER_L,
+            dimensions = Vector3(900f, 850f, 900f),
+            position = Vector3(450f, 0f, 450f)
+        )
+        val drawerCabinet = KitchenElement(
+            id = "cab_drawer_1",
+            name = "وحدة أدراج 80 سم",
+            type = KitchenElementType.BASE_3_DRAWERS,
+            dimensions = Vector3(800f, 850f, 600f),
+            position = Vector3(1300f, 0f, 300f)
+        )
+        val sinkCabinet = KitchenElement(
+            id = "cab_sink_1",
+            name = "وحدة حوض 90 سم",
+            type = KitchenElementType.BASE_SINK_UNIT,
+            dimensions = Vector3(900f, 850f, 600f),
+            position = Vector3(2150f, 0f, 300f)
+        )
+
+        val matchedAccessories = com.example.domain.model.SmartAccessoryMatcher.matchAccessoriesForElements(
+            elements = listOf(cornerCabinet, drawerCabinet, sinkCabinet)
+        )
+        assertTrue("Should auto-match corner and drawer/sink accessories", matchedAccessories.isNotEmpty())
+        val totalAccCost = com.example.domain.model.SmartAccessoryMatcher.calculateTotalAccessoriesCostUsd(matchedAccessories)
+        assertTrue("Total accessories cost should be > 0", totalAccCost > 0.0)
+
+        // 3. Test Real-Time Engineering Door-Opening Clearance Validation
+        // Place an opposing cabinet only 450mm in front of drawerCabinet (front at z=600, opposing front at z=1050)
+        val opposingBlockingCabinet = KitchenElement(
+            id = "cab_opposing_close",
+            name = "وحدة مقابلة قريبة جداً",
+            type = KitchenElementType.BASE_DOUBLE_DOOR,
+            dimensions = Vector3(800f, 850f, 600f),
+            position = Vector3(1300f, 0f, 1350f), // halfD=300 => minZ=1050; gap to drawerCabinet (maxZ=600) is 450mm < 750mm!
+            rotationY = 180f
+        )
+        val room = RoomStructure(widthMm = 4000f, heightMm = 2800f, depthMm = 3000f)
+        val report = com.example.core.geometry.ErgonomicValidationEngine.validate(
+            room = room,
+            elements = listOf(drawerCabinet, opposingBlockingCabinet)
+        )
+        assertTrue(
+            "Should detect tight door-opening clearance zone (< 650mm)",
+            report.doorClearanceZones.any { it.availableClearanceMm < 650f }
+        )
+    }
+
+    @Test
+    fun testCornerCatalogHarmonyPresetsAndFull360CabinetEnclosure() {
+        // 1. Verify expanded upper & lower corner cabinets and multi-purpose catalog units
+        val cornerTypes = KitchenElementType.entries.filter { it.isCornerUnit }
+        assertTrue("Should have at least 10 upper and lower corner cabinet types", cornerTypes.size >= 10)
+        assertTrue(cornerTypes.contains(KitchenElementType.BASE_CORNER_DIAGONAL_90))
+        assertTrue(cornerTypes.contains(KitchenElementType.BASE_CORNER_CAROUSEL_95))
+        assertTrue(cornerTypes.contains(KitchenElementType.WALL_CORNER_DIAGONAL_65))
+        assertTrue(cornerTypes.contains(KitchenElementType.BRIDGE_CORNER_L_90))
+
+        // 2. Verify Wall & Floor 3D Harmony Presets and Palettes
+        assertTrue("Should have wall palette finishes", MaterialFinish.WALL_PALETTE.size >= 6)
+        assertTrue("Should have floor palette finishes", MaterialFinish.FLOOR_PALETTE.size >= 6)
+        assertTrue("Should have curated wall/floor harmony presets", MaterialFinish.HARMONY_PRESETS.size >= 6)
+
+        // 3. Verify 360-degree full enclosure (full back panel + full side panels + photo URIs)
+        val customPhotoCabinet = KitchenElement(
+            id = "cab_photo_360",
+            name = "خزانة مصممة من صور 360°",
+            type = KitchenElementType.BASE_DOUBLE_DOOR,
+            position = Vector3(1000f, 0f, 300f),
+            dimensions = Vector3(900f, 850f, 600f),
+            material = MaterialFinish.NATURAL_OAK,
+            sidePanelMaterial = MaterialFinish.WALNUT_DARK,
+            hasBackPanel = true,
+            hasFullSidePanels = true,
+            frontPhotoUri = "content://media/external/images/front_1",
+            sidePhotoUri = "content://media/external/images/side_1",
+            customDivisionsCount = 3
+        )
+        assertTrue(customPhotoCabinet.hasBackPanel)
+        assertTrue(customPhotoCabinet.hasFullSidePanels)
+        assertEquals(MaterialFinish.WALNUT_DARK, customPhotoCabinet.sidePanelMaterial)
+        assertEquals(3, customPhotoCabinet.customDivisionsCount)
+    }
+
+    @Test
+    fun testVrCameraSensorOpticalFlowAndStandardMaterialDimensionsControl() {
+        // 1. Test VR Camera Sensor Optical Flow (Pan, Tilt, and Looming Walk)
+        val gw = com.example.core.camera.VrCameraOpticalFlowEngine.GRID_W
+        val gh = com.example.core.camera.VrCameraOpticalFlowEngine.GRID_H
+        val prevGrid = FloatArray(gw * gh)
+        val panCurrGrid = FloatArray(gw * gh)
+
+        // Populate textured synthetic pattern and shift it by dx = -1, dy = +1
+        for (y in 0 until gh) {
+            for (x in 0 until gw) {
+                val pattern = ((x * 23 + y * 31) % 200).toFloat() + 20f
+                prevGrid[y * gw + x] = pattern
+            }
+        }
+        for (y in 0 until gh) {
+            for (x in 0 until gw) {
+                val srcX = (x + 1).coerceIn(0, gw - 1)
+                val srcY = (y - 1).coerceIn(0, gh - 1)
+                panCurrGrid[y * gw + x] = prevGrid[srcY * gw + srcX]
+            }
+        }
+
+        val panTiltTelemetry = com.example.core.camera.VrCameraOpticalFlowEngine.computeOpticalFlowAndWalkDelta(
+            prevGrid = prevGrid,
+            currGrid = panCurrGrid,
+            gridW = gw,
+            gridH = gh,
+            sensitivity = 1.2f
+        )
+        assertTrue("Should track textured camera patches", panTiltTelemetry.trackedPatchesCount > 10)
+        assertTrue("Horizontal shift should produce positive pan delta", panTiltTelemetry.panDeltaDeg > 0.1f)
+        assertTrue("Vertical shift should produce positive tilt delta", panTiltTelemetry.tiltDeltaDeg > 0.1f)
+
+        // 2. Test Standard Material Dimensions Control for Melamine Sheets & Aluminum Bars
+        val defaultSizes = com.example.core.cam.StandardMelamineSheetSize.DEFAULT_SIZES
+        assertTrue("Should provide at least 5 standard melamine sheet sizes", defaultSizes.size >= 5)
+
+        val stdConfig = com.example.core.cam.StandardMaterialDimensionsConfig(
+            melamineSheetLengthMm = 2800f,
+            melamineSheetWidthMm = 2070f,
+            melamineBoardThicknessMm = 18f,
+            aluminumStandardBarLengthMm = 5800f
+        )
+        assertEquals(5.796f, stdConfig.singleMelamineSheetAreaSqM, 0.01f)
+
+        val sampleCabinet = com.example.core.cam.ParametricCabinet(
+            id = "cab_test_dims",
+            name = "خزانة قياسية",
+            widthMm = 900f,
+            heightMm = 850f,
+            depthMm = 600f,
+            panelThicknessMm = stdConfig.melamineBoardThicknessMm
+        )
+        val cutParts = sampleCabinet.generateCarcassCutParts()
+        val sheetsStandard244 = com.example.core.cam.NestingEngine.packPanels(
+            parts = cutParts,
+            sheetWidthMm = 2440f,
+            sheetLengthMm = 1220f
+        )
+        val sheetsJumbo280 = com.example.core.cam.NestingEngine.packPanels(
+            parts = cutParts,
+            sheetWidthMm = stdConfig.melamineSheetLengthMm,
+            sheetLengthMm = stdConfig.melamineSheetWidthMm
+        )
+        assertTrue(sheetsStandard244.isNotEmpty())
+        assertTrue(sheetsJumbo280.isNotEmpty())
+        assertTrue(
+            "Jumbo 280x207 sheet has larger raw area than standard 244x122 sheet",
+            sheetsJumbo280.first().totalAreaSqMm > sheetsStandard244.first().totalAreaSqMm
+        )
+    }
+
+    @Test
+    fun testKitchenCostCalculator_AutomaticCostDistributionAndUnitPricing() {
+        val room = RoomStructure(widthMm = 4200f, depthMm = 3600f, heightMm = 2800f)
+        val drawerUnit = KitchenElement(
+            id = "cab_drawers_90",
+            name = "وحدة 3 أدراج 90 سم",
+            type = KitchenElementType.BASE_3_DRAWERS_90,
+            position = Vector3(1200f, 0f, 300f),
+            dimensions = Vector3(900f, 850f, 600f),
+            material = MaterialFinish.NATURAL_OAK,
+            countertopMaterial = MaterialFinish.CARRARA_MARBLE
+        )
+        val cornerUnit = KitchenElement(
+            id = "cab_corner_90",
+            name = "زاوية سفلية 90 سم",
+            type = KitchenElementType.BASE_CORNER_L,
+            position = Vector3(450f, 0f, 450f),
+            dimensions = Vector3(900f, 850f, 900f),
+            material = MaterialFinish.NATURAL_OAK,
+            countertopMaterial = MaterialFinish.BLACK_GRANITE
+        )
+        val project = com.example.domain.repository.KitchenProject(
+            id = "proj_cost_test",
+            name = "مطبخ اختبار التكلفة",
+            room = room,
+            elements = listOf(drawerUnit, cornerUnit)
+        )
+
+        val distribution = com.example.data.remote.KitchenCostCalculator.calculateProjectCostDistribution(
+            project = project,
+            accessoriesCostUsd = 240.0
+        )
+
+        assertTrue("Materials total must be positive", distribution.materialsTotalUsd > 300.0)
+        assertTrue("Labor cost must be positive", distribution.laborCostUsd > 100.0)
+        assertTrue("Accessories cost must be >= 240", distribution.accessoriesCostUsd >= 240.0)
+        assertEquals(
+            distribution.materialsTotalUsd + distribution.laborCostUsd + distribution.accessoriesCostUsd,
+            distribution.totalCostUsd,
+            1.0
+        )
+        assertEquals(2, distribution.unitCostsByElementId.size)
+    }
 }
-
-
-
-

@@ -1,5 +1,6 @@
 package com.example.presentation.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +28,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.core.cam.*
 import com.example.domain.model.KitchenElement
 import com.example.domain.model.MaterialFinish
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -68,6 +71,10 @@ enum class AluminumProfileSystem(
 fun AluminumMelamineCalculatorDialog(
     selectedElement: KitchenElement?,
     sceneCabinets: List<ParametricCabinet>,
+    initialMaterialDimensionsConfig: StandardMaterialDimensionsConfig = StandardMaterialDimensionsConfig(),
+    initialSavedSheetSizes: List<StandardMelamineSheetSize> = StandardMelamineSheetSize.DEFAULT_SIZES,
+    onUpdateMaterialDimensionsConfig: (StandardMaterialDimensionsConfig) -> Unit = {},
+    onSaveCustomSheetSize: (StandardMelamineSheetSize) -> Unit = {},
     onCreateOrUpdateCabinetIn3D: (ParametricCabinet) -> Unit,
     onOpenFullNestingOptimizer: () -> Unit,
     onOpenAluminumBarNesting: () -> Unit = {},
@@ -78,6 +85,11 @@ fun AluminumMelamineCalculatorDialog(
 
     // Input unit toggle: true = سم (cm), false = مم (mm)
     var useCentimeters by remember { mutableStateOf(true) }
+    val unitMultiplier = if (useCentimeters) 10f else 1f
+    val unitLabel = if (useCentimeters) "سم" else "مم"
+
+    // Toggle for Standard Material Dimensions Control Panel (خيار التحكم بالأبعاد القياسية للمواد)
+    var isStandardMaterialControlExpanded by remember { mutableStateOf(true) }
 
     // Custom Dimension Inputs (initialized from selected 3D cabinet if any, else 80x85x60 cm)
     var widthInputText by remember(selectedElement?.id, useCentimeters) {
@@ -101,22 +113,77 @@ fun AluminumMelamineCalculatorDialog(
     var shelvesCount by remember { mutableIntStateOf(1) }
     var drawersCount by remember { mutableIntStateOf(0) }
 
-    // Aluminum & Melamine Technical Parameters
+    // =========================================================================
+    // Standard Material Dimensions State (الأبعاد القياسية لقضبان الألمنيوم وألواح الميلامين)
+    // =========================================================================
     var selectedSystem by remember { mutableStateOf(AluminumProfileSystem.FULL_ALUMINUM_MELAMINE) }
-    var standardBarLengthMm by remember { mutableFloatStateOf(6000f) } // 6.0m, 5.8m, 6.5m, 4.5m or custom
-    var customBarLengthText by remember { mutableStateOf("6000") }
-    var aluminumSectionSizeText by remember { mutableStateOf("45") }
-    var aluminumThicknessText by remember { mutableStateOf("1.8") }
-    var aluminumWastePctText by remember { mutableStateOf("8") }
 
-    var melamineThicknessMm by remember { mutableFloatStateOf(18f) }
+    // 1. Standard Aluminum Bar Stock Dimensions
+    var availableBarLengthsMm by remember {
+        mutableStateOf(
+            listOf(6000f, 5800f, 6500f, 4500f, 3000f, initialMaterialDimensionsConfig.aluminumStandardBarLengthMm)
+                .distinct()
+                .sortedDescending()
+        )
+    }
+    var standardBarLengthMm by remember {
+        mutableFloatStateOf(initialMaterialDimensionsConfig.aluminumStandardBarLengthMm.coerceIn(500f, 12000f))
+    }
+    var customBarLengthText by remember(useCentimeters) {
+        val v = if (useCentimeters) (standardBarLengthMm / 10f).roundToInt() else standardBarLengthMm.roundToInt()
+        mutableStateOf(v.toString())
+    }
+    var aluminumSectionSizeText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.aluminumProfileSectionMm.roundToInt().toString())
+    }
+    var aluminumThicknessText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.aluminumWallThicknessMm.toString())
+    }
+    var aluminumWastePctText by remember { mutableStateOf("8") }
+    var aluminumSawKerfText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.aluminumSawKerfMm.toString())
+    }
+    var aluminumBarEndTrimText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.aluminumBarEndTrimMm.roundToInt().toString())
+    }
+
+    // 2. Standard Melamine / MDF Board Stock Dimensions
+    var savedSheetSizes by remember { mutableStateOf(initialSavedSheetSizes) }
+    var sheetLengthMm by remember {
+        mutableFloatStateOf(initialMaterialDimensionsConfig.melamineSheetLengthMm.coerceIn(600f, 5000f))
+    }
+    var sheetWidthMm by remember {
+        mutableFloatStateOf(initialMaterialDimensionsConfig.melamineSheetWidthMm.coerceIn(500f, 3500f))
+    }
+    var sheetLengthInputText by remember(useCentimeters) {
+        val v = if (useCentimeters) (sheetLengthMm / 10f).roundToInt() else sheetLengthMm.roundToInt()
+        mutableStateOf(v.toString())
+    }
+    var sheetWidthInputText by remember(useCentimeters) {
+        val v = if (useCentimeters) (sheetWidthMm / 10f).roundToInt() else sheetWidthMm.roundToInt()
+        mutableStateOf(v.toString())
+    }
+    var melamineThicknessMm by remember {
+        mutableFloatStateOf(initialMaterialDimensionsConfig.melamineBoardThicknessMm.coerceIn(8f, 36f))
+    }
+    var melamineThicknessInputText by remember {
+        mutableStateOf(melamineThicknessMm.roundToInt().toString())
+    }
+    var backPanelThicknessMm by remember {
+        mutableFloatStateOf(initialMaterialDimensionsConfig.backPanelThicknessMm.coerceIn(3f, 18f))
+    }
+    var sheetEdgeTrimText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.sheetEdgeTrimMm.roundToInt().toString())
+    }
+    var woodSawKerfText by remember {
+        mutableStateOf(initialMaterialDimensionsConfig.woodSawKerfMm.toString())
+    }
+
     var topStretcherWidthText by remember { mutableStateOf("100") }
     var hasBackPanel by remember { mutableStateOf(true) }
     var backGrooveInsetText by remember { mutableStateOf("10") }
-    var sheetWidthMm by remember { mutableFloatStateOf(2440f) }
-    var sheetLengthMm by remember { mutableFloatStateOf(1220f) }
+    var statusConfirmationBanner by remember { mutableStateOf<String?>(null) }
 
-    val unitMultiplier = if (useCentimeters) 10f else 1f
     val widthMm = ((widthInputText.toFloatOrNull() ?: if (useCentimeters) 80f else 800f) * unitMultiplier).coerceIn(250f, 3000f)
     val heightMm = ((heightInputText.toFloatOrNull() ?: if (useCentimeters) 85f else 850f) * unitMultiplier).coerceIn(300f, 2600f)
     val depthMm = ((depthInputText.toFloatOrNull() ?: if (useCentimeters) 60f else 600f) * unitMultiplier).coerceIn(250f, 1200f)
@@ -125,13 +192,41 @@ fun AluminumMelamineCalculatorDialog(
     val aluSectionMm = (aluminumSectionSizeText.toFloatOrNull() ?: selectedSystem.sectionMm).coerceIn(15f, 120f)
     val aluThickMm = (aluminumThicknessText.toFloatOrNull() ?: selectedSystem.wallThickMm).coerceIn(0.8f, 5f)
     val aluWastePct = (aluminumWastePctText.toFloatOrNull() ?: 8f).coerceIn(0f, 35f)
+    val aluSawKerfMm = (aluminumSawKerfText.toFloatOrNull() ?: 4.0f).coerceIn(0f, 15f)
+    val aluEndTrimMm = (aluminumBarEndTrimText.toFloatOrNull() ?: 10f).coerceIn(0f, 100f)
+    val effectiveBarLengthMm = (standardBarLengthMm - aluEndTrimMm * 2f).coerceAtLeast(500f)
+
+    val sheetTrimMm = (sheetEdgeTrimText.toFloatOrNull() ?: 10f).coerceIn(0f, 50f)
+    val woodSawKerfMm = (woodSawKerfText.toFloatOrNull() ?: 3.2f).coerceIn(0f, 12f)
     val stretcherWidthMm = (topStretcherWidthText.toFloatOrNull() ?: 100f).coerceIn(50f, 250f)
     val grooveInsetMm = if (hasBackPanel) (backGrooveInsetText.toFloatOrNull() ?: 10f).coerceIn(0f, 25f) else 0f
+
+    // Sync standard material dimensions back to parent when changed
+    LaunchedEffect(
+        sheetLengthMm, sheetWidthMm, melamineThicknessMm, backPanelThicknessMm,
+        sheetTrimMm, woodSawKerfMm, standardBarLengthMm, aluSectionMm, aluThickMm, aluSawKerfMm, aluEndTrimMm
+    ) {
+        onUpdateMaterialDimensionsConfig(
+            StandardMaterialDimensionsConfig(
+                melamineSheetLengthMm = sheetLengthMm,
+                melamineSheetWidthMm = sheetWidthMm,
+                melamineBoardThicknessMm = melamineThicknessMm,
+                backPanelThicknessMm = backPanelThicknessMm,
+                sheetEdgeTrimMm = sheetTrimMm,
+                woodSawKerfMm = woodSawKerfMm,
+                aluminumStandardBarLengthMm = standardBarLengthMm,
+                aluminumProfileSectionMm = aluSectionMm,
+                aluminumWallThicknessMm = aluThickMm,
+                aluminumSawKerfMm = aluSawKerfMm,
+                aluminumBarEndTrimMm = aluEndTrimMm
+            )
+        )
+    }
 
     val customCabinet = remember(
         widthMm, heightMm, depthMm, toeKickMm, shelvesCount, drawersCount,
         selectedSystem, aluSectionMm, aluThickMm, aluWastePct,
-        melamineThicknessMm, stretcherWidthMm, hasBackPanel, grooveInsetMm, selectedElement?.id
+        melamineThicknessMm, backPanelThicknessMm, stretcherWidthMm, hasBackPanel, grooveInsetMm, selectedElement?.id
     ) {
         ParametricCabinet(
             id = selectedElement?.id ?: "alu_custom_cab",
@@ -141,6 +236,7 @@ fun AluminumMelamineCalculatorDialog(
             depthMm = depthMm,
             toeKickHeightMm = toeKickMm,
             panelThicknessMm = melamineThicknessMm,
+            backPanelThicknessMm = if (hasBackPanel) backPanelThicknessMm else 0f,
             numberOfShelves = shelvesCount,
             numberOfDrawers = drawersCount,
             doorStyle = if (selectedSystem.includeDoorFrameProfile) DoorStyle.ALUMINUM_GLASS else DoorStyle.SLAB_MODERN,
@@ -148,7 +244,7 @@ fun AluminumMelamineCalculatorDialog(
             carcassMaterial = if (melamineThicknessMm <= 16.5f) PanelMaterial.MDF_16MM else PanelMaterial.MDF_18MM,
             facadeMaterial = selectedElement?.material ?: MaterialFinish.NATURAL_OAK,
             hasBackPanel = hasBackPanel,
-            backPanelMaterialName = if (hasBackPanel) "MDF ميلامين 8 مم" else "بدون ظهر",
+            backPanelMaterialName = if (hasBackPanel) "MDF ميلامين ${backPanelThicknessMm.roundToInt()} مم" else "بدون ظهر",
             backGrooveInsetMm = grooveInsetMm,
             topStretcherWidthMm = stretcherWidthMm,
             aluminumProfileThicknessMm = aluThickMm,
@@ -167,6 +263,7 @@ fun AluminumMelamineCalculatorDialog(
             sceneCabinets.map {
                 it.copy(
                     panelThicknessMm = melamineThicknessMm,
+                    backPanelThicknessMm = if (hasBackPanel) backPanelThicknessMm else 0f,
                     hasBackPanel = hasBackPanel,
                     backGrooveInsetMm = grooveInsetMm,
                     topStretcherWidthMm = stretcherWidthMm,
@@ -187,11 +284,11 @@ fun AluminumMelamineCalculatorDialog(
         )
     }
 
-    val packedBars = remember(aluSummary.cuts, standardBarLengthMm) {
+    val packedBars = remember(aluSummary.cuts, effectiveBarLengthMm, aluSawKerfMm) {
         NestingEngine.packAluminumProfiles(
             cuts = aluSummary.cuts,
-            barLengthMm = standardBarLengthMm,
-            kerfMm = 4.0f
+            barLengthMm = effectiveBarLengthMm,
+            kerfMm = aluSawKerfMm
         )
     }
 
@@ -199,13 +296,30 @@ fun AluminumMelamineCalculatorDialog(
         targetCabinetsList.flatMap { it.generateCarcassCutParts() }
     }
 
+    // Real-time 2D Guillotine Sheet Nesting using the controlled Standard Melamine Sheet Dimensions
+    val packedMelamineSheets = remember(melamineParts, sheetLengthMm, sheetWidthMm, woodSawKerfMm, sheetTrimMm) {
+        NestingEngine.packPanels(
+            parts = melamineParts,
+            sheetWidthMm = sheetLengthMm,
+            sheetLengthMm = sheetWidthMm,
+            bladeKerfMm = woodSawKerfMm,
+            sheetTrimMm = sheetTrimMm
+        )
+    }
+
     val totalMelamineAreaSqM = remember(melamineParts) {
         melamineParts.sumOf { it.areaSqM.toDouble() }.toFloat()
     }
 
-    val singleSheetAreaSqM = (sheetWidthMm * sheetLengthMm) / 1_000_000f
-    val estimatedMelamineSheets = remember(totalMelamineAreaSqM, singleSheetAreaSqM) {
-        if (totalMelamineAreaSqM <= 0f) 0 else ceil((totalMelamineAreaSqM * 1.12f) / singleSheetAreaSqM).toInt()
+    val singleSheetAreaSqM = (sheetLengthMm * sheetWidthMm) / 1_000_000f
+    val areaBasedSheets = remember(totalMelamineAreaSqM, singleSheetAreaSqM) {
+        if (totalMelamineAreaSqM <= 0f) 0 else ceil((totalMelamineAreaSqM * 1.12f) / singleSheetAreaSqM.coerceAtLeast(0.1f)).toInt()
+    }
+    val estimatedMelamineSheets = maxOf(areaBasedSheets, packedMelamineSheets.size)
+
+    val averageSheetUtilizationPct = remember(packedMelamineSheets) {
+        if (packedMelamineSheets.isEmpty()) 0f
+        else packedMelamineSheets.map { it.utilizationPercentage }.average().toFloat()
     }
 
     val totalEdgeBandingMeters = remember(melamineParts) {
@@ -245,17 +359,46 @@ fun AluminumMelamineCalculatorDialog(
                             color = Color.White
                         )
                         Text(
-                            text = "أدخل مقاسات الخزانة مباشرة لحساب أطوال وعدد قضبان الألمنيوم ومقاسات ألواح الميلامين بدقة هندسية",
+                            text = "تحكم بالأبعاد القياسية للمواد الخام (القضبان والألواح) واحسب كشوفات القص والهدر بدقة هندسية",
                             fontSize = 11.sp,
                             color = Color(0xFF94A3B8)
                         )
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color(0xFF94A3B8))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = isStandardMaterialControlExpanded,
+                            onClick = { isStandardMaterialControlExpanded = !isStandardMaterialControlExpanded },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Tune,
+                                    contentDescription = null,
+                                    tint = if (isStandardMaterialControlExpanded) Color.White else Color(0xFFFBBF24),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    "الأبعاد القياسية للمواد (${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()}سم | ${String.format(Locale.US, "%.1f", standardBarLengthMm / 1000f)}م)",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFFD97706),
+                                selectedLabelColor = Color.White
+                            ),
+                            modifier = Modifier.testTag("toggle_standard_material_dims_btn")
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color(0xFF94A3B8))
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 // Scope Switcher (Custom Entered Dimensions vs Full 3D Scene) + Unit Switcher (cm / mm)
                 Row(
@@ -291,19 +434,21 @@ fun AluminumMelamineCalculatorDialog(
                         FilterChip(
                             selected = useCentimeters,
                             onClick = { useCentimeters = true },
-                            label = { Text("سنتيمتر (سم)", fontSize = 10.sp) }
+                            label = { Text("سنتيمتر (سم)", fontSize = 10.sp) },
+                            modifier = Modifier.testTag("calc_unit_cm_chip")
                         )
                         FilterChip(
                             selected = !useCentimeters,
                             onClick = { useCentimeters = false },
-                            label = { Text("مليمتر (مم)", fontSize = 10.sp) }
+                            label = { Text("مليمتر (مم)", fontSize = 10.sp) },
+                            modifier = Modifier.testTag("calc_unit_mm_chip")
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Top Live Summary KPI Strip
+                // Top Live Summary KPI Strip (dynamically reflects controlled Standard Material Dimensions)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -313,23 +458,49 @@ fun AluminumMelamineCalculatorDialog(
                     horizontalArrangement = Arrangement.SpaceAround
                 ) {
                     CalcKpiItem(
-                        label = "قضبان الألمنيوم المطلوبة",
-                        value = "${maxOf(aluSummary.requiredStandardBarsCount, packedBars.size)} قضيب (${(standardBarLengthMm / 1000f)}م)",
+                        label = "قضبان الألمنيوم القياسية المطلوبة",
+                        value = "${maxOf(aluSummary.requiredStandardBarsCount, packedBars.size)} قضيب (${String.format(Locale.US, "%.2f", standardBarLengthMm / 1000f)}م)",
                         subValue = "صافي: ${"%.2f".format(aluSummary.netLinearMeters)} م.ط | مع الهدر: ${"%.2f".format(aluSummary.grossLinearMetersWithWaste)} م.ط",
                         color = Color(0xFF38BDF8)
                     )
                     CalcKpiItem(
                         label = "تفصيل القضبان (أفقي / عمودي)",
                         value = "أفقي: ${"%.2f".format(aluSummary.horizontalTotalMeters)} م | عمودي: ${"%.2f".format(aluSummary.verticalTotalMeters)} م",
-                        subValue = "إجمالي القطع المقصوصة: ${aluSummary.cuts.sumOf { it.quantity }} قطعة",
+                        subValue = "إجمالي القطع المقصوصة: ${aluSummary.cuts.sumOf { it.quantity }} قطعة (مقطع ${aluSectionMm.roundToInt()}مم)",
                         color = Color(0xFFF59E0B)
                     )
                     CalcKpiItem(
-                        label = "ألواح الميلامين المطلوبة",
-                        value = "$estimatedMelamineSheets لوح (${(sheetWidthMm / 10f).toInt()}×${(sheetLengthMm / 10f).toInt()} سم)",
-                        subValue = "المساحة: ${"%.2f".format(totalMelamineAreaSqM)} م² | شريط PVC: ${"%.1f".format(totalEdgeBandingMeters)} م.ط",
+                        label = "ألواح الميلامين القياسية المطلوبة",
+                        value = "$estimatedMelamineSheets لوح (${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()} سم × ${melamineThicknessMm.roundToInt()}مم)",
+                        subValue = "مساحة اللوح: ${"%.2f".format(singleSheetAreaSqM)} م² | استغلال: ${"%.1f".format(averageSheetUtilizationPct)}% | شريط: ${"%.1f".format(totalEdgeBandingMeters)}م",
                         color = Color(0xFF10B981)
                     )
+                }
+
+                statusConfirmationBanner?.let { msg ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = Color(0xFF064E3B),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color(0xFF10B981)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(msg, color = Color(0xFFA7F3D0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = null,
+                                tint = Color(0xFFA7F3D0),
+                                modifier = Modifier
+                                    .size(15.dp)
+                                    .clickable { statusConfirmationBanner = null }
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -340,7 +511,363 @@ fun AluminumMelamineCalculatorDialog(
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Section A: Direct Dimension Input Card (إدخال المقاسات المباشر)
+                    // =========================================================================
+                    // NEW SECTION: Standard Material Dimensions Control Card
+                    // (خيار التحكم بالأبعاد القياسية للمواد: قضبان الألمنيوم + ألواح الميلامين)
+                    // =========================================================================
+                    item {
+                        AnimatedVisibility(visible = isStandardMaterialControlExpanded) {
+                            Surface(
+                                color = Color(0xFF1E293B),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("standard_material_dimensions_control_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Straighten,
+                                                contentDescription = null,
+                                                tint = Color(0xFFFBBF24),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = "التحكم بالأبعاد القياسية للمواد الخام (قضبان الألمنيوم وألواح الميلامين)",
+                                                    color = Color(0xFFFBBF24),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                                Text(
+                                                    text = "حدد المقاسات القياسية المتوفرة في ورشتك أو المصنع ليتم تحديث عدد الألواح والقضبان ونسب الهدر تلقائياً",
+                                                    color = Color(0xFFCBD5E1),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                val newSize = StandardMelamineSheetSize(
+                                                    id = "custom_${sheetLengthMm.roundToInt()}_${sheetWidthMm.roundToInt()}",
+                                                    titleAr = "مخصص ${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()} سم",
+                                                    lengthMm = sheetLengthMm,
+                                                    widthMm = sheetWidthMm
+                                                )
+                                                if (savedSheetSizes.none { abs(it.lengthMm - sheetLengthMm) < 2f && abs(it.widthMm - sheetWidthMm) < 2f }) {
+                                                    savedSheetSizes = savedSheetSizes + newSize
+                                                    onSaveCustomSheetSize(newSize)
+                                                }
+                                                if (availableBarLengthsMm.none { abs(it - standardBarLengthMm) < 2f }) {
+                                                    availableBarLengthsMm = (availableBarLengthsMm + standardBarLengthMm).sortedDescending()
+                                                }
+                                                statusConfirmationBanner = "تم اعتماد الأبعاد القياسية: لوح ميلامين ${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()} سم (${melamineThicknessMm.roundToInt()}مم) | قضيب ألمنيوم ${String.format(Locale.US, "%.2f", standardBarLengthMm / 1000f)} متر"
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.testTag("apply_standard_material_dims_btn")
+                                        ) {
+                                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("اعتماد وحفظ الأبعاد القياسية", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+
+                                    HorizontalDivider(color = Color(0xFF334155))
+
+                                    // Part 1: Melamine / MDF Standard Board Dimensions
+                                    Text(
+                                        text = "أولاً: الأبعاد القياسية لألواح الميلامين والـ MDF (الطول × العرض × السماكة):",
+                                        color = Color(0xFF34D399),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.5.sp
+                                    )
+
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        items(savedSheetSizes, key = { it.id }) { preset ->
+                                            val isSelected = abs(sheetLengthMm - preset.lengthMm) < 2f &&
+                                                abs(sheetWidthMm - preset.widthMm) < 2f
+                                            FilterChip(
+                                                selected = isSelected,
+                                                onClick = {
+                                                    sheetLengthMm = preset.lengthMm
+                                                    sheetWidthMm = preset.widthMm
+                                                    sheetLengthInputText = if (useCentimeters) {
+                                                        (preset.lengthMm / 10f).roundToInt().toString()
+                                                    } else {
+                                                        preset.lengthMm.roundToInt().toString()
+                                                    }
+                                                    sheetWidthInputText = if (useCentimeters) {
+                                                        (preset.widthMm / 10f).roundToInt().toString()
+                                                    } else {
+                                                        preset.widthMm.roundToInt().toString()
+                                                    }
+                                                },
+                                                label = { Text(preset.titleAr, fontSize = 10.sp) },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = Color(0xFF059669),
+                                                    selectedLabelColor = Color.White
+                                                ),
+                                                modifier = Modifier.testTag("preset_sheet_size_${preset.id}")
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedTextField(
+                                            value = sheetLengthInputText,
+                                            onValueChange = { txt ->
+                                                sheetLengthInputText = txt
+                                                txt.toFloatOrNull()?.let { parsed ->
+                                                    sheetLengthMm = (parsed * unitMultiplier).coerceIn(600f, 5000f)
+                                                }
+                                            },
+                                            label = { Text("طول اللوح القياسي ($unitLabel)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_sheet_length_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = sheetWidthInputText,
+                                            onValueChange = { txt ->
+                                                sheetWidthInputText = txt
+                                                txt.toFloatOrNull()?.let { parsed ->
+                                                    sheetWidthMm = (parsed * unitMultiplier).coerceIn(500f, 3500f)
+                                                }
+                                            },
+                                            label = { Text("عرض اللوح القياسي ($unitLabel)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_sheet_width_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = melamineThicknessInputText,
+                                            onValueChange = { txt ->
+                                                melamineThicknessInputText = txt
+                                                txt.toFloatOrNull()?.let { parsed ->
+                                                    melamineThicknessMm = parsed.coerceIn(8f, 36f)
+                                                }
+                                            },
+                                            label = { Text("سمك الميلامين (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(0.85f)
+                                                .testTag("std_melamine_thickness_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = sheetEdgeTrimText,
+                                            onValueChange = { sheetEdgeTrimText = it },
+                                            label = { Text("تشذيب الحافة (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(0.8f)
+                                                .testTag("std_sheet_trim_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = woodSawKerfText,
+                                            onValueChange = { woodSawKerfText = it },
+                                            label = { Text("شفرة المنشار (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(0.8f)
+                                                .testTag("std_wood_kerf_input")
+                                        )
+                                    }
+
+                                    // Quick Board Thickness Chips + Back Panel Thickness Chips
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("سماكات الميلامين القياسية:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
+                                            listOf(16f, 18f, 22f, 25f).forEach { thick ->
+                                                FilterChip(
+                                                    selected = abs(melamineThicknessMm - thick) < 0.2f,
+                                                    onClick = {
+                                                        melamineThicknessMm = thick
+                                                        melamineThicknessInputText = thick.roundToInt().toString()
+                                                    },
+                                                    label = { Text("${thick.roundToInt()} مم", fontSize = 9.5.sp) }
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("ظهر الخزانة:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
+                                            Switch(
+                                                checked = hasBackPanel,
+                                                onCheckedChange = { hasBackPanel = it },
+                                                modifier = Modifier.height(22.dp)
+                                            )
+                                            if (hasBackPanel) {
+                                                listOf(6f, 8f, 18f).forEach { bThick ->
+                                                    FilterChip(
+                                                        selected = abs(backPanelThicknessMm - bThick) < 0.2f,
+                                                        onClick = { backPanelThicknessMm = bThick },
+                                                        label = { Text("ظهر ${bThick.roundToInt()}مم", fontSize = 9.sp) }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalDivider(color = Color(0xFF334155))
+
+                                    // Part 2: Standard Aluminum Profile Bar Stock Dimensions
+                                    Text(
+                                        text = "ثانياً: الأبعاد القياسية لقضبان وبروفايلات الألمنيوم (طول القضيب × المقطع × السماكة):",
+                                        color = Color(0xFF38BDF8),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.5.sp
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        LazyRow(
+                                            modifier = Modifier.weight(1.6f),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            items(availableBarLengthsMm) { barLen ->
+                                                val isSel = abs(standardBarLengthMm - barLen) < 2f
+                                                FilterChip(
+                                                    selected = isSel,
+                                                    onClick = {
+                                                        standardBarLengthMm = barLen
+                                                        customBarLengthText = if (useCentimeters) {
+                                                            (barLen / 10f).roundToInt().toString()
+                                                        } else {
+                                                            barLen.roundToInt().toString()
+                                                        }
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            "${String.format(Locale.US, "%.2f", barLen / 1000f)} م (${barLen.roundToInt()}مم)",
+                                                            fontSize = 10.sp
+                                                        )
+                                                    },
+                                                    colors = FilterChipDefaults.filterChipColors(
+                                                        selectedContainerColor = Color(0xFF0284C7),
+                                                        selectedLabelColor = Color.White
+                                                    ),
+                                                    modifier = Modifier.testTag("std_alu_bar_chip_${barLen.roundToInt()}")
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(8.dp))
+
+                                        OutlinedTextField(
+                                            value = customBarLengthText,
+                                            onValueChange = { txt ->
+                                                customBarLengthText = txt
+                                                txt.toFloatOrNull()?.let { parsed ->
+                                                    standardBarLengthMm = (parsed * unitMultiplier).coerceIn(500f, 12000f)
+                                                }
+                                            },
+                                            label = { Text("طول القضيب القياسي ($unitLabel)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(0.9f)
+                                                .testTag("calc_custom_bar_length_input")
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedTextField(
+                                            value = aluminumSectionSizeText,
+                                            onValueChange = { aluminumSectionSizeText = it },
+                                            label = { Text("مقطع القضيب (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_alu_section_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = aluminumThicknessText,
+                                            onValueChange = { aluminumThicknessText = it },
+                                            label = { Text("سماكة الألمنيوم (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_alu_thickness_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = aluminumSawKerfText,
+                                            onValueChange = { aluminumSawKerfText = it },
+                                            label = { Text("شفرة منشار الألمنيوم (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_alu_kerf_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = aluminumBarEndTrimText,
+                                            onValueChange = { aluminumBarEndTrimText = it },
+                                            label = { Text("تهذيب طرف القضيب (مم)", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("std_alu_trim_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = aluminumWastePctText,
+                                            onValueChange = { aluminumWastePctText = it },
+                                            label = { Text("هامش الهدر %", fontSize = 9.5.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier.weight(0.85f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Section A: Direct Cabinet Dimension Input Card (إدخال مقاسات الخزانة المباشر)
                     if (calcScopeMode == 0) {
                         item {
                             Surface(
@@ -350,7 +877,6 @@ fun AluminumMelamineCalculatorDialog(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    val unitLabel = if (useCentimeters) "سم" else "مم"
                                     Text(
                                         text = "1. أدخل مقاسات الخزانة / الوحدة المراد تفصيلها ($unitLabel):",
                                         color = Color(0xFF38BDF8),
@@ -369,7 +895,9 @@ fun AluminumMelamineCalculatorDialog(
                                             label = { Text("العرض ($unitLabel)", fontSize = 10.sp) },
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                             singleLine = true,
-                                            modifier = Modifier.weight(1f).testTag("alu_calc_width_input")
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("alu_calc_width_input")
                                         )
                                         OutlinedTextField(
                                             value = heightInputText,
@@ -377,7 +905,9 @@ fun AluminumMelamineCalculatorDialog(
                                             label = { Text("الارتفاع ($unitLabel)", fontSize = 10.sp) },
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                             singleLine = true,
-                                            modifier = Modifier.weight(1f).testTag("alu_calc_height_input")
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("alu_calc_height_input")
                                         )
                                         OutlinedTextField(
                                             value = depthInputText,
@@ -385,7 +915,9 @@ fun AluminumMelamineCalculatorDialog(
                                             label = { Text("العمق ($unitLabel)", fontSize = 10.sp) },
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                             singleLine = true,
-                                            modifier = Modifier.weight(1f).testTag("alu_calc_depth_input")
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("alu_calc_depth_input")
                                         )
                                         OutlinedTextField(
                                             value = toeKickInputText,
@@ -394,6 +926,14 @@ fun AluminumMelamineCalculatorDialog(
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                             singleLine = true,
                                             modifier = Modifier.weight(1f)
+                                        )
+                                        OutlinedTextField(
+                                            value = topStretcherWidthText,
+                                            onValueChange = { topStretcherWidthText = it },
+                                            label = { Text("سخة الميلامين (مم)", fontSize = 10.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier.weight(0.9f)
                                         )
                                     }
 
@@ -433,11 +973,11 @@ fun AluminumMelamineCalculatorDialog(
                                             )
                                             AssistChip(
                                                 onClick = {
-                                                    widthInputText = if (useCentimeters) "60" else "600"
-                                                    heightInputText = if (useCentimeters) "220" else "2200"
-                                                    depthInputText = if (useCentimeters) "60" else "600"
+                                                    widthInputText = if (useCentimeters) "95" else "950"
+                                                    heightInputText = if (useCentimeters) "85" else "850"
+                                                    depthInputText = if (useCentimeters) "95" else "950"
                                                 },
-                                                label = { Text("برج مؤونة 60×220", fontSize = 10.sp) }
+                                                label = { Text("كورنر زاوية 95×95", fontSize = 10.sp) }
                                             )
                                         }
 
@@ -455,7 +995,7 @@ fun AluminumMelamineCalculatorDialog(
                         }
                     }
 
-                    // Section B: Aluminum Profile System & Melamine Sheet Specifications
+                    // Section B: Aluminum Profile Structural System Selector
                     item {
                         Surface(
                             color = Color(0xFF1E293B),
@@ -465,7 +1005,7 @@ fun AluminumMelamineCalculatorDialog(
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text(
-                                    text = "2. مواصفات قضبان الألمنيوم وألواح الميلامين:",
+                                    text = "2. نظام تركيب بروفايلات الألمنيوم والخزائن:",
                                     color = Color(0xFFF59E0B),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp
@@ -473,7 +1013,7 @@ fun AluminumMelamineCalculatorDialog(
                                 Spacer(modifier = Modifier.height(6.dp))
 
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    items(AluminumProfileSystem.values()) { sys ->
+                                    items(AluminumProfileSystem.entries) { sys ->
                                         FilterChip(
                                             selected = selectedSystem == sys,
                                             onClick = {
@@ -487,114 +1027,6 @@ fun AluminumMelamineCalculatorDialog(
                                                 selectedLabelColor = Color(0xFFFDE68A)
                                             )
                                         )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = aluminumSectionSizeText,
-                                        onValueChange = { aluminumSectionSizeText = it },
-                                        label = { Text("مقطع القضيب (مم)", fontSize = 10.sp) },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    OutlinedTextField(
-                                        value = aluminumThicknessText,
-                                        onValueChange = { aluminumThicknessText = it },
-                                        label = { Text("سماكة الألمنيوم (مم)", fontSize = 10.sp) },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    OutlinedTextField(
-                                        value = aluminumWastePctText,
-                                        onValueChange = { aluminumWastePctText = it },
-                                        label = { Text("نسبة هدر القضبان %", fontSize = 10.sp) },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    OutlinedTextField(
-                                        value = topStretcherWidthText,
-                                        onValueChange = { topStretcherWidthText = it },
-                                        label = { Text("سخة الميلامين (مم)", fontSize = 10.sp) },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("طول القضيب القياسي:", color = Color(0xFFCBD5E1), fontSize = 11.sp)
-                                        FilterChip(
-                                            selected = standardBarLengthMm == 6000f,
-                                            onClick = {
-                                                standardBarLengthMm = 6000f
-                                                customBarLengthText = "6000"
-                                            },
-                                            label = { Text("6.0 م (6000مم)", fontSize = 10.sp) }
-                                        )
-                                        FilterChip(
-                                            selected = standardBarLengthMm == 5800f,
-                                            onClick = {
-                                                standardBarLengthMm = 5800f
-                                                customBarLengthText = "5800"
-                                            },
-                                            label = { Text("5.8 م (5800مم)", fontSize = 10.sp) }
-                                        )
-                                        FilterChip(
-                                            selected = standardBarLengthMm == 6500f,
-                                            onClick = {
-                                                standardBarLengthMm = 6500f
-                                                customBarLengthText = "6500"
-                                            },
-                                            label = { Text("6.5 م (6500مم)", fontSize = 10.sp) }
-                                        )
-                                        OutlinedTextField(
-                                            value = customBarLengthText,
-                                            onValueChange = { txt ->
-                                                customBarLengthText = txt
-                                                txt.toFloatOrNull()?.let { parsed ->
-                                                    standardBarLengthMm = parsed.coerceIn(500f, 12000f)
-                                                }
-                                            },
-                                            label = { Text("طول مخصص (مم)", fontSize = 9.sp) },
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            singleLine = true,
-                                            modifier = Modifier.width(110.dp).testTag("calc_custom_bar_length_input")
-                                        )
-                                    }
-
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("سمك الميلامين:", color = Color(0xFFCBD5E1), fontSize = 11.sp)
-                                        FilterChip(
-                                            selected = melamineThicknessMm == 18f,
-                                            onClick = { melamineThicknessMm = 18f },
-                                            label = { Text("18 مم", fontSize = 10.sp) }
-                                        )
-                                        FilterChip(
-                                            selected = melamineThicknessMm == 16f,
-                                            onClick = { melamineThicknessMm = 16f },
-                                            label = { Text("16 مم", fontSize = 10.sp) }
-                                        )
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("ظهر الخزانة:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
-                                            Switch(checked = hasBackPanel, onCheckedChange = { hasBackPanel = it })
-                                        }
                                     }
                                 }
                             }
@@ -622,10 +1054,10 @@ fun AluminumMelamineCalculatorDialog(
                                         fontSize = 13.sp
                                     )
                                     Text(
-                                        text = "إجمالي القضبان: ${maxOf(aluSummary.requiredStandardBarsCount, packedBars.size)} قضيب × ${(standardBarLengthMm / 1000f)}م",
+                                        text = "إجمالي القضبان القياسية: ${maxOf(aluSummary.requiredStandardBarsCount, packedBars.size)} قضيب × ${String.format(Locale.US, "%.2f", standardBarLengthMm / 1000f)}م (صافي القص ${(effectiveBarLengthMm / 10f).roundToInt()}سم)",
                                         color = Color(0xFF34D399),
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
+                                        fontSize = 11.5.sp
                                     )
                                 }
 
@@ -657,7 +1089,7 @@ fun AluminumMelamineCalculatorDialog(
                                 if (packedBars.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "توزيع القص على القضبان القياسية (1D Bar Nesting - شامل نسب الهدر والقطع الفردية):",
+                                        text = "توزيع القص على القضبان القياسية (${(standardBarLengthMm / 10f).roundToInt()} سم - منشار ${aluSawKerfMm}مم):",
                                         color = Color(0xFFFDE68A),
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold
@@ -710,7 +1142,7 @@ fun AluminumMelamineCalculatorDialog(
                         }
                     }
 
-                    // Section D: Detailed Melamine Panels Cut-List Breakdown
+                    // Section D: Detailed Melamine Panels Cut-List & Standard Sheet Nesting Breakdown
                     item {
                         Surface(
                             color = Color(0xFF1E293B),
@@ -725,7 +1157,7 @@ fun AluminumMelamineCalculatorDialog(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "4. كشف تفصيل وقص ألواح الميلامين (جوانب، قاع، سخات، رفوف، درف، ظهر):",
+                                        text = "4. كشف تفصيل وقص ألواح الميلامين القياسية (${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()} سم):",
                                         color = Color(0xFF34D399),
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp
@@ -739,6 +1171,42 @@ fun AluminumMelamineCalculatorDialog(
                                 }
 
                                 Spacer(modifier = Modifier.height(6.dp))
+
+                                // Summary per Standard Melamine Sheet
+                                if (packedMelamineSheets.isNotEmpty()) {
+                                    Text(
+                                        text = "توزيع الألواح القياسية (${packedMelamineSheets.size} لوح × ${(sheetLengthMm / 10f).roundToInt()}×${(sheetWidthMm / 10f).roundToInt()} سم | تشذيب ${sheetTrimMm.roundToInt()}مم | منشار ${woodSawKerfMm}مم):",
+                                        color = Color(0xFFFDE68A),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    packedMelamineSheets.forEach { sheet ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 2.dp)
+                                                .background(Color(0xFF0F172A), RoundedCornerShape(8.dp))
+                                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "لوح #${sheet.sheetIndex} (${sheet.material.displayName}) — ${sheet.placements.size} قطعة",
+                                                color = Color.White,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "استغلال: ${"%.1f".format(sheet.utilizationPercentage)}% | هدر: ${"%.2f".format(sheet.wasteAreaSqM)} م² (${"%.1f".format(sheet.wastePercentage)}%)",
+                                                color = Color(0xFF34D399),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                }
 
                                 melamineParts.forEach { part ->
                                     Row(

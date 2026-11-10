@@ -90,14 +90,14 @@ fun ProjectsManagerDialog(
                         }
                         Column {
                             Text(
-                                text = "إدارة المشاريع والتخزين المحلي (Room)",
+                                text = "إدارة المشاريع والمزامنة السحابية (Firestore & Room)",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 color = Color.White
                             )
                             Text(
-                                text = "حفظ واسترجاع مشاريع المطابخ محلياً 100% بدون إنترنت + تصدير JSON",
-                                fontSize = 12.sp,
+                                text = "حفظ واسترجاع تصاميم المطابخ ومكوناتها عبر حساب Google في Firestore + التخزين المحلي",
+                                fontSize = 11.sp,
                                 color = Color(0xFF94A3B8)
                             )
                         }
@@ -330,6 +330,176 @@ fun ProjectsManagerDialog(
                                         Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("حفظ نقطة استرجاع", fontSize = 12.sp)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // Save to Firestore Cloud Button
+                                Button(
+                                    onClick = {
+                                        val title = newProjectName.takeIf { it.isNotBlank() } ?: uiState.project.name
+                                        viewModel.saveCurrentDesignToFirestore(title)
+                                    },
+                                    enabled = !uiState.isCloudSyncing,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(46.dp)
+                                        .testTag("save_to_firestore_cloud_btn")
+                                ) {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (uiState.isCloudSyncing)
+                                            "جاري المزامنة مع Firestore..."
+                                        else
+                                            "حفظ التصميم ومكونات المطبخ في Firestore السحابي (${String.format(Locale.US, "$%.0f", uiState.costDistribution.totalCostUsd)})",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = Color.White
+                                    )
+                                }
+
+                                uiState.cloudSyncStatusMessage?.let { msg ->
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF064E3B).copy(alpha = 0.45f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = msg,
+                                            color = Color(0xFF6EE7B7),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Section 1B: Firestore Cloud Designs List (تصاميم الحساب السحابية في Firestore)
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF131D31)),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudDone,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "تصاميم حسابك في سحابة Firestore (${uiState.cloudDesigns.size})",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = "الحساب: ${uiState.currentUserEmail ?: uiState.currentUserDisplayName ?: "متصل"} • المكونات المحفوظة: ${uiState.cloudComponents.size}",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF94A3B8)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                if (uiState.cloudDesigns.isEmpty()) {
+                                    Text(
+                                        text = "لا توجد تصاميم محفوظة في حسابك على Firestore بعد. اضغط على 'حفظ التصميم ومكونات المطبخ في Firestore السحابي' أعلاه لحفظ تصميمك الحالي.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF94A3B8)
+                                    )
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        uiState.cloudDesigns.forEach { cloudDesign ->
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = Color(0xFF1E293B),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .testTag("cloud_design_item_${cloudDesign.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(10.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = cloudDesign.title,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 13.sp,
+                                                            color = Color.White
+                                                        )
+                                                        Text(
+                                                            text = String.format(
+                                                                Locale.US,
+                                                                "الأبعاد: %.0f×%.0f سم | %d وحدة | الإجمالي: $%.0f",
+                                                                cloudDesign.roomWidthCm,
+                                                                cloudDesign.roomDepthCm,
+                                                                cloudDesign.elementCount,
+                                                                cloudDesign.totalCostUsd
+                                                            ),
+                                                            fontSize = 11.sp,
+                                                            color = Color(0xFF34D399)
+                                                        )
+                                                    }
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        IconButton(
+                                                            onClick = { viewModel.deleteCloudDesignFromFirestore(cloudDesign.id) },
+                                                            modifier = Modifier.size(34.dp)
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Delete,
+                                                                contentDescription = "حذف سحابي",
+                                                                tint = Color(0xFFEF4444),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                        Button(
+                                                            onClick = {
+                                                                viewModel.loadDesignFromFirestore(cloudDesign)
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    "تم استرجاع '${cloudDesign.title}' من Firestore!",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            },
+                                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                            modifier = Modifier.height(34.dp)
+                                                        ) {
+                                                            Text("استرجاع وتعديل", fontSize = 11.sp, color = Color.White)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

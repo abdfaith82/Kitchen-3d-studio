@@ -64,14 +64,17 @@ import com.example.core.math.Vector3
 import com.example.core.perspective.CalibratedCamera
 import com.example.core.perspective.FloorCalibrationQuad
 import com.example.core.perspective.PerspectiveCalibrator
+import androidx.compose.ui.layout.onGloballyPositioned
 import com.example.domain.model.KitchenElementType
 import com.example.domain.model.MaterialFinish
+import com.example.presentation.ui.RealisticKitchenRenderer3D.renderCabinetRealisticDetails
 import com.example.presentation.viewmodel.KitchenEditorUiState
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -87,7 +90,8 @@ enum class OverlayMode(val arabicTitle: String) {
     SMART_INPAINTING("2. مسح الحائط الذكي"),
     PLACE_CABINETS("3. تصميم الكاميرا الفوري 3D"),
     IMAGE_TO_IMAGE_8K_RENDER("4. رندر 8K الواقعي"),
-    JSON_OBJECT_EDITOR("5. استيراد وتعديل JSON")
+    JSON_OBJECT_EDITOR("5. استيراد وتعديل JSON"),
+    AR_MATERIAL_SWAPPER("6. تعديل الخامة بالواقع المعزز")
 }
 
 data class InpaintCleanRegion(
@@ -107,12 +111,14 @@ fun PerspectiveOverlayDialog(
     onResizeSelected: (String, Float, Float, Float) -> Unit = { _, _, _, _ -> },
     onDeleteSelected: () -> Unit = {},
     onCycleSelectedMaterial: () -> Unit = {},
+    onApplyArMaterialSwap: (elementId: String, cabinetFinish: MaterialFinish?, countertopFinish: MaterialFinish?) -> Unit = { _, _, _ -> },
     onImportOrUpdateJson: (String) -> Int = { 0 },
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     var roomPhotoBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isLiveCameraStreamActive by remember { mutableStateOf(false) }
+    var liveCameraPreviewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var isLiveCameraStreamActive by remember { mutableStateOf(true) }
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -151,8 +157,14 @@ fun PerspectiveOverlayDialog(
     var editPosYMmText by remember { mutableStateOf("") }
     var editPosZMmText by remember { mutableStateOf("") }
 
-    // Keep JSON editor synced when user selects a cabinet
-    LaunchedEffect(selectedElement?.id, selectedElement?.dimensions, selectedElement?.position, selectedElement?.material) {
+    // Keep JSON editor synced when user selects a cabinet or modifies its material/countertop in AR
+    LaunchedEffect(
+        selectedElement?.id,
+        selectedElement?.dimensions,
+        selectedElement?.position,
+        selectedElement?.material,
+        selectedElement?.countertopMaterial
+    ) {
         if (selectedElement != null) {
             jsonEditorText = JsonProjectExporter.serializeSingleElementToJsonString(
                 elem = selectedElement,
@@ -175,23 +187,49 @@ fun PerspectiveOverlayDialog(
         }
     }
 
+    var quadPinsInitialized by remember { mutableStateOf(false) }
     var quadPins by remember {
         mutableStateOf(
             FloorCalibrationQuad(
-                frontLeft = Offset(200f, 750f),
-                frontRight = Offset(800f, 750f),
-                backRight = Offset(650f, 450f),
-                backLeft = Offset(350f, 450f)
+                frontLeft = Offset(180f, 760f),
+                frontRight = Offset(860f, 760f),
+                backRight = Offset(700f, 440f),
+                backLeft = Offset(340f, 440f),
+                floorWidthMm = state.project.room.widthMm,
+                floorDepthMm = state.project.room.depthMm
             )
         )
     }
 
-    var calibratedCamera by remember { mutableStateOf<CalibratedCamera?>(null) }
+    // Non-reactive projection cache so updating projected bounds inside Canvas never causes recomposition flicker
+    val arHitCache = remember {
+        object {
+            var calibratedCamera: CalibratedCamera? = null
+            val projectedCabinetCenters = HashMap<String, Offset>()
+            val projectedCabinetBounds = HashMap<String, RectF>()
+            var frontToBackIds: List<String> = emptyList()
+        }
+    }
     var draggedPinIndex by remember { mutableIntStateOf(-1) }
     var draggedElementId by remember { mutableStateOf<String?>(null) }
     var arDragStartPos by remember { mutableStateOf<Vector3?>(null) }
     var arAccumDeltaWorld by remember { mutableStateOf(Vector3.ZERO) }
-    val projectedCabinetCenters = remember { mutableStateMapOf<String, Offset>() }
+    val latestState by rememberUpdatedState(state)
+
+    fun hitTestCabinetOnCamera(screenPt: Offset): String? {
+        for (id in arHitCache.frontToBackIds) {
+            val rect = arHitCache.projectedCabinetBounds[id]
+            if (rect != null && rect.contains(screenPt.x, screenPt.y)) {
+                return id
+            }
+        }
+        val nearest = arHitCache.projectedCabinetCenters.entries
+            .minByOrNull { (_, pt) -> (pt - screenPt).getDistanceSquared() }
+        if (nearest != null && (nearest.value - screenPt).getDistance() <= 130f) {
+            return nearest.key
+        }
+        return null
+    }
 
     // Live Camera Snapshot Launcher
     val cameraCaptureLauncher = rememberLauncherForActivityResult(
@@ -293,7 +331,32 @@ fun PerspectiveOverlayDialog(
                             color = Color(0xFF94A3B8)
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF064E3B),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+                            modifier = Modifier.testTag("camera_live_autosave_badge")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Save,
+                                    contentDescription = null,
+                                    tint = Color(0xFF34D399),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "Room Auto-Save (${state.autoSaveState.secondsUntilNextSave}ث)",
+                                    color = Color(0xFFA7F3D0),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                         TextButton(
                             onClick = { isTopControlsCollapsed = !isTopControlsCollapsed },
                             modifier = Modifier.testTag("toggle_ar_controls_collapse_btn")
@@ -426,21 +489,33 @@ fun PerspectiveOverlayDialog(
                             Text("استيراد كائن JSON", fontSize = 10.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                         }
 
-                        // Import Object via Camera Scan Button (analyzes camera frame into 3D element + JSON)
+                        // Import Object via Camera Scan Button (analyzes live camera frame into Professional CAD/BIM & PBR JSON)
                         Button(
                             onClick = {
+                                val capturedBmp = try {
+                                    val pv = liveCameraPreviewRef
+                                    if (pv != null &&
+                                        pv.previewStreamState.value == PreviewView.StreamState.STREAMING &&
+                                        pv.width > 0 && pv.height > 0
+                                    ) {
+                                        pv.bitmap ?: roomPhotoBitmap
+                                    } else {
+                                        roomPhotoBitmap
+                                    }
+                                } catch (_: Exception) {
+                                    roomPhotoBitmap
+                                }
                                 val scan = com.example.core.importer.CameraObjectScanner.analyzeCapturedBitmap(
-                                    bitmap = roomPhotoBitmap
+                                    bitmap = capturedBmp
                                 )
-                                val elemJson = JsonProjectExporter.serializeSingleElementToJsonString(
-                                    elem = scan.element,
-                                    includeBoundingBoxes = true,
+                                val proJson = com.example.core.importer.CameraObjectScanner.serializeScanToProfessionalJson(
+                                    analysis = scan,
                                     prettyPrint = true
                                 )
-                                jsonEditorText = elemJson
-                                onImportOrUpdateJson(elemJson)
+                                jsonEditorText = proJson
+                                onImportOrUpdateJson(proJson)
                                 mode = OverlayMode.JSON_OBJECT_EDITOR
-                                jsonStatusMessage = scan.summaryAr
+                                jsonStatusMessage = "${scan.summaryAr} • JSON احترافي (CAD/BIM v2.0)"
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -450,7 +525,7 @@ fun PerspectiveOverlayDialog(
                         ) {
                             Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("استيراد كائن عبر الكاميرا 📷", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("استيراد كائن عبر الكاميرا ➔ JSON احترافي 📷", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
 
                         FilterChip(
@@ -486,6 +561,7 @@ fun PerspectiveOverlayDialog(
                                         OverlayMode.PLACE_CABINETS -> Color(0xFF10B981)
                                         OverlayMode.IMAGE_TO_IMAGE_8K_RENDER -> Color(0xFFA855F7)
                                         OverlayMode.JSON_OBJECT_EDITOR -> Color(0xFF0D9488)
+                                        OverlayMode.AR_MATERIAL_SWAPPER -> Color(0xFFEC4899)
                                     },
                                     selectedLabelColor = Color.White
                                 ),
@@ -494,19 +570,32 @@ fun PerspectiveOverlayDialog(
                         }
                     }
 
-                    // Row 2: Insert Complete 3D Kitchen Designs or Individual 3D Cabinets onto the Camera Scene
+                    // Row 2: Live Camera Visual 3D Cabinet & Template Catalog Strip (tap or drag directly onto Live Camera view)
+                    val liveCatalogItems = remember {
+                        listOf(
+                            KitchenElementType.BASE_DOUBLE_DOOR to "خزانة سفلية",
+                            KitchenElementType.BASE_3_DRAWERS to "وحدة أدراج",
+                            KitchenElementType.BASE_SINK_UNIT to "وحدة حوض",
+                            KitchenElementType.BASE_UNDER_OVEN to "وحدة فرن/بوتاجاز",
+                            KitchenElementType.WALL_GLASS_BLACK_FRAME to "علوية ألمنيوم",
+                            KitchenElementType.TALL_GLASS_VITRINE_LED to "دولاب فيترينة",
+                            KitchenElementType.ISLAND_COUNTER to "جزيرة مطبخ",
+                            KitchenElementType.REFRIGERATOR_FROST to "ثلاجة ذكية"
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 4.dp)
                             .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .horizontalScroll(rememberScrollState()),
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                            .horizontalScroll(rememberScrollState())
+                            .testTag("live_camera_design_catalog_bar"),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "إدخال تصميم 3D للكاميرا:",
+                            text = "تصميم مباشر على الكاميرا (Live Mode):",
                             color = Color(0xFF38BDF8),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
@@ -532,27 +621,43 @@ fun PerspectiveOverlayDialog(
                             },
                             label = { Text("مطبخ جزيرة", fontSize = 10.sp, color = Color.White) }
                         )
-                        AssistChip(
-                            onClick = {
-                                onAddElement(KitchenElementType.BASE_DOUBLE_DOOR)
-                                mode = OverlayMode.PLACE_CABINETS
-                            },
-                            label = { Text("+ خزانة سفلية", fontSize = 10.sp, color = Color(0xFF34D399)) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                onAddElement(KitchenElementType.WALL_GLASS_BLACK_FRAME)
-                                mode = OverlayMode.PLACE_CABINETS
-                            },
-                            label = { Text("+ خزانة علوية ألمنيوم", fontSize = 10.sp, color = Color(0xFF34D399)) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                onAddElement(KitchenElementType.TALL_GLASS_VITRINE_LED)
-                                mode = OverlayMode.PLACE_CABINETS
-                            },
-                            label = { Text("+ دولاب فيترينة", fontSize = 10.sp, color = Color(0xFFFBBF24)) }
-                        )
+                        liveCatalogItems.forEach { (elemType, shortTitle) ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF0F172A),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
+                                modifier = Modifier
+                                    .clickable {
+                                        onAddElement(elemType)
+                                        mode = OverlayMode.PLACE_CABINETS
+                                    }
+                                    .testTag("live_camera_add_${elemType.name}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    CabinetPreviewThumbnail(
+                                        type = elemType,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "+ $shortTitle",
+                                            color = Color(0xFF34D399),
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${elemType.defaultDimensions.x.toInt() / 10}×${elemType.defaultDimensions.y.toInt() / 10} سم",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 8.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Contextual sub-controls for Smart Inpainting or 8K Render
@@ -628,25 +733,25 @@ fun PerspectiveOverlayDialog(
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color(0xFF020617), RoundedCornerShape(12.dp))
                             .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
-                            .pointerInput(mode, state.project.elements) {
+                            .pointerInput(mode) {
                                 detectTapGestures { tapPos ->
                                     if (mode != OverlayMode.CALIBRATE_PERSPECTIVE && mode != OverlayMode.SMART_INPAINTING) {
-                                        val hit = projectedCabinetCenters.entries
-                                            .minByOrNull { (_, pt) -> (pt - tapPos).getDistanceSquared() }
-                                        if (hit != null && (hit.value - tapPos).getDistance() <= 120f) {
-                                            onSelectElement(hit.key)
+                                        val hitId = hitTestCabinetOnCamera(tapPos)
+                                        if (hitId != null) {
+                                            onSelectElement(hitId)
                                         } else {
                                             onSelectElement(null)
                                         }
                                     }
                                 }
                             }
-                            .pointerInput(mode, quadPins, state.project.elements) {
+                            .pointerInput(mode) {
                                 detectDragGestures(
                                     onDragStart = { startPos ->
+                                        val curState = latestState
                                         when (mode) {
                                             OverlayMode.CALIBRATE_PERSPECTIVE -> {
-                                                val radius = 45f
+                                                val radius = 55f
                                                 draggedPinIndex = when {
                                                     (startPos - quadPins.frontLeft).getDistance() <= radius -> 0
                                                     (startPos - quadPins.frontRight).getDistance() <= radius -> 1
@@ -666,15 +771,17 @@ fun PerspectiveOverlayDialog(
                                             }
                                             OverlayMode.PLACE_CABINETS,
                                             OverlayMode.IMAGE_TO_IMAGE_8K_RENDER,
-                                            OverlayMode.JSON_OBJECT_EDITOR -> {
-                                                val hit = projectedCabinetCenters.entries
-                                                    .minByOrNull { (_, pt) -> (pt - startPos).getDistanceSquared() }
-                                                val resolvedId = if (hit != null && (hit.value - startPos).getDistance() <= 140f) {
-                                                    onSelectElement(hit.key)
-                                                    hit.key
-                                                } else state.singleSelectedElement?.id
+                                            OverlayMode.JSON_OBJECT_EDITOR,
+                                            OverlayMode.AR_MATERIAL_SWAPPER -> {
+                                                val hitId = hitTestCabinetOnCamera(startPos)
+                                                val resolvedId = if (hitId != null) {
+                                                    if (curState.singleSelectedElement?.id != hitId) {
+                                                        onSelectElement(hitId)
+                                                    }
+                                                    hitId
+                                                } else curState.singleSelectedElement?.id
                                                 draggedElementId = resolvedId
-                                                arDragStartPos = state.project.elements.find { it.id == resolvedId }?.position
+                                                arDragStartPos = curState.project.elements.find { it.id == resolvedId }?.position
                                                 arAccumDeltaWorld = Vector3.ZERO
                                             }
                                         }
@@ -693,6 +800,7 @@ fun PerspectiveOverlayDialog(
                                     },
                                     onDrag = { change, dragAmount ->
                                         change.consume()
+                                        val curState = latestState
                                         when (mode) {
                                             OverlayMode.CALIBRATE_PERSPECTIVE -> {
                                                 if (draggedPinIndex >= 0) {
@@ -717,18 +825,25 @@ fun PerspectiveOverlayDialog(
                                             }
                                             OverlayMode.PLACE_CABINETS,
                                             OverlayMode.IMAGE_TO_IMAGE_8K_RENDER,
-                                            OverlayMode.JSON_OBJECT_EDITOR -> {
-                                                val targetId = draggedElementId ?: state.singleSelectedElement?.id
-                                                val elem = state.project.elements.find { it.id == targetId }
-                                                if (elem != null) {
+                                            OverlayMode.JSON_OBJECT_EDITOR,
+                                            OverlayMode.AR_MATERIAL_SWAPPER -> {
+                                                val targetId = draggedElementId ?: curState.singleSelectedElement?.id
+                                                val elem = curState.project.elements.find { it.id == targetId }
+                                                if (elem != null && !elem.isLocked) {
                                                     val startOrigin = arDragStartPos ?: elem.position.also { arDragStartPos = it }
-                                                    val cam = calibratedCamera
-                                                    val yawRad = Math.toRadians((cam?.yawDegrees ?: 0f).toDouble()).toFloat()
-                                                    val floorRight = Vector3(kotlin.math.cos(yawRad), 0f, -kotlin.math.sin(yawRad)).normalized()
-                                                    val floorFwd = Vector3(kotlin.math.sin(yawRad), 0f, kotlin.math.cos(yawRad)).normalized()
+                                                    val cam = arHitCache.calibratedCamera
+                                                    val rawRight = if (cam != null) Vector3(cam.right.x, 0f, cam.right.z) else Vector3.UNIT_X
+                                                    val floorRight = if (rawRight.lengthSquared() > 0.001f) rawRight.normalized() else Vector3.UNIT_X
+                                                    val rawFwd = if (cam != null) Vector3(cam.forward.x, 0f, cam.forward.z) else Vector3(0f, 0f, -1f)
+                                                    val floorFwd = if (rawFwd.lengthSquared() > 0.001f) rawFwd.normalized() else Vector3(0f, 0f, -1f)
 
-                                                    val stepMm = 3.5f
-                                                    val deltaStep = (floorRight * (dragAmount.x * stepMm)) + (floorFwd * (-dragAmount.y * stepMm))
+                                                    val distToCam = if (cam != null) {
+                                                        (elem.position - cam.cameraPosition).length().coerceIn(900f, 8000f)
+                                                    } else 3400f
+                                                    val fovPx = (cam?.focalLengthPx ?: 800f).coerceAtLeast(350f)
+                                                    val mmPerPixel = (distToCam / fovPx).coerceIn(1.5f, 5.5f)
+
+                                                    val deltaStep = (floorRight * (dragAmount.x * mmPerPixel)) + (floorFwd * (-dragAmount.y * mmPerPixel))
                                                     arAccumDeltaWorld = arAccumDeltaWorld + Vector3(deltaStep.x, 0f, deltaStep.z)
                                                     val rawTargetPos = startOrigin + arAccumDeltaWorld
                                                     onMoveElement(elem.id, rawTargetPos)
@@ -741,14 +856,35 @@ fun PerspectiveOverlayDialog(
                     ) {
                         // 0. Live CameraX Stream Preview Layer (when active and permission granted)
                         if (isLiveCameraStreamActive && hasCameraPermission) {
-                            LiveCameraPreviewLayer(modifier = Modifier.fillMaxSize())
+                            LiveCameraPreviewLayer(
+                                onPreviewReady = { liveCameraPreviewRef = it },
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
 
-                        Canvas(modifier = Modifier.fillMaxSize()) {
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onGloballyPositioned { coords ->
+                                    val cw = coords.size.width.toFloat()
+                                    val ch = coords.size.height.toFloat()
+                                    if (!quadPinsInitialized && cw > 120f && ch > 120f) {
+                                        quadPinsInitialized = true
+                                        quadPins = FloorCalibrationQuad(
+                                            frontLeft = Offset(cw * 0.14f, ch * 0.82f),
+                                            frontRight = Offset(cw * 0.86f, ch * 0.82f),
+                                            backRight = Offset(cw * 0.72f, ch * 0.48f),
+                                            backLeft = Offset(cw * 0.28f, ch * 0.48f),
+                                            floorWidthMm = state.project.room.widthMm,
+                                            floorDepthMm = state.project.room.depthMm
+                                        )
+                                    }
+                                }
+                        ) {
                             val canvasW = size.width
                             val canvasH = size.height
 
-                            // 1. Static Background Photo Layer (drawn only when Live Camera Stream is off)
+                            // 1. Static Background Photo or Live Architectural Camera Viewfinder Layer
                             if (!isLiveCameraStreamActive || !hasCameraPermission) {
                                 roomPhotoBitmap?.let { bmp ->
                                     drawImage(
@@ -757,25 +893,45 @@ fun PerspectiveOverlayDialog(
                                         dstSize = androidx.compose.ui.unit.IntSize(canvasW.toInt(), canvasH.toInt())
                                     )
                                 } ?: run {
+                                    // Studio Architectural Room Wall + Floor Backdrop
                                     drawRect(
                                         brush = Brush.verticalGradient(
                                             colors = listOf(Color(0xFFD6D1C7), Color(0xFFC2BBB0)),
                                             startY = 0f,
-                                            endY = canvasH * 0.62f
+                                            endY = canvasH * 0.56f
                                         ),
                                         topLeft = Offset.Zero,
-                                        size = Size(canvasW, canvasH * 0.62f)
+                                        size = Size(canvasW, canvasH * 0.56f)
                                     )
                                     drawRect(
                                         brush = Brush.verticalGradient(
                                             colors = listOf(Color(0xFFACA395), Color(0xFF8A8072)),
-                                            startY = canvasH * 0.62f,
+                                            startY = canvasH * 0.56f,
                                             endY = canvasH
                                         ),
-                                        topLeft = Offset(0f, canvasH * 0.62f),
-                                        size = Size(canvasW, canvasH * 0.38f)
+                                        topLeft = Offset(0f, canvasH * 0.56f),
+                                        size = Size(canvasW, canvasH * 0.44f)
                                     )
                                 }
+                            }
+
+                            // Live Camera Optical Viewfinder Corner Brackets when Live Mode is active
+                            if (isLiveCameraStreamActive) {
+                                val bracketLen = 28f
+                                val pad = 16f
+                                val bracketColor = Color(0xAA10B981)
+                                // Top-left
+                                drawLine(bracketColor, Offset(pad, pad), Offset(pad + bracketLen, pad), strokeWidth = 3f)
+                                drawLine(bracketColor, Offset(pad, pad), Offset(pad, pad + bracketLen), strokeWidth = 3f)
+                                // Top-right
+                                drawLine(bracketColor, Offset(canvasW - pad, pad), Offset(canvasW - pad - bracketLen, pad), strokeWidth = 3f)
+                                drawLine(bracketColor, Offset(canvasW - pad, pad), Offset(canvasW - pad, pad + bracketLen), strokeWidth = 3f)
+                                // Bottom-left
+                                drawLine(bracketColor, Offset(pad, canvasH - pad), Offset(pad + bracketLen, canvasH - pad), strokeWidth = 3f)
+                                drawLine(bracketColor, Offset(pad, canvasH - pad), Offset(pad, canvasH - pad - bracketLen), strokeWidth = 3f)
+                                // Bottom-right
+                                drawLine(bracketColor, Offset(canvasW - pad, canvasH - pad), Offset(canvasW - pad - bracketLen, canvasH - pad), strokeWidth = 3f)
+                                drawLine(bracketColor, Offset(canvasW - pad, canvasH - pad), Offset(canvasW - pad, canvasH - pad - bracketLen), strokeWidth = 3f)
                             }
 
                             // 2. Smart Inpainting Wall Cleaner Layer
@@ -795,9 +951,13 @@ fun PerspectiveOverlayDialog(
                                 )
                             }
 
-                            // 3. Compute Calibrated Perspective Camera from Floor Quad
-                            val cam = PerspectiveCalibrator.calibrateFromFloorQuad(quadPins, canvasW, canvasH)
-                            calibratedCamera = cam
+                            // 3. Compute Calibrated Perspective Camera from Floor Quad & Room Dimensions
+                            val activeQuad = quadPins.copy(
+                                floorWidthMm = state.project.room.widthMm,
+                                floorDepthMm = state.project.room.depthMm
+                            )
+                            val cam = PerspectiveCalibrator.calibrateFromFloorQuad(activeQuad, canvasW, canvasH)
+                            arHitCache.calibratedCamera = cam
 
                             // 4. Perspective Matching Engineering Grid
                             if (showPerspectiveEngineeringGrid || mode == OverlayMode.CALIBRATE_PERSPECTIVE) {
@@ -808,38 +968,33 @@ fun PerspectiveOverlayDialog(
                                     strokeWidth = 2f
                                 )
 
+                                val roomW = state.project.room.widthMm
+                                val roomD = state.project.room.depthMm
                                 val gridSteps = 6
                                 for (i in 0..gridSteps) {
                                     val t = i.toFloat() / gridSteps
-                                    val frontPt = Offset(
-                                        quadPins.frontLeft.x + (quadPins.frontRight.x - quadPins.frontLeft.x) * t,
-                                        quadPins.frontLeft.y + (quadPins.frontRight.y - quadPins.frontLeft.y) * t
-                                    )
-                                    val backPt = Offset(
-                                        quadPins.backLeft.x + (quadPins.backRight.x - quadPins.backLeft.x) * t,
-                                        quadPins.backLeft.y + (quadPins.backRight.y - quadPins.backLeft.y) * t
-                                    )
-                                    drawLine(
-                                        color = Color(0x6638BDF8),
-                                        start = frontPt,
-                                        end = backPt,
-                                        strokeWidth = 1.2f
-                                    )
-
-                                    val leftPt = Offset(
-                                        quadPins.backLeft.x + (quadPins.frontLeft.x - quadPins.backLeft.x) * t,
-                                        quadPins.backLeft.y + (quadPins.frontLeft.y - quadPins.backLeft.y) * t
-                                    )
-                                    val rightPt = Offset(
-                                        quadPins.backRight.x + (quadPins.frontRight.x - quadPins.backRight.x) * t,
-                                        quadPins.backRight.y + (quadPins.frontRight.y - quadPins.backRight.y) * t
-                                    )
-                                    drawLine(
-                                        color = Color(0x5538BDF8),
-                                        start = leftPt,
-                                        end = rightPt,
-                                        strokeWidth = 1.2f
-                                    )
+                                    val xMm = roomW * t
+                                    val zMm = roomD * t
+                                    val pNorth = cam.project3DToImage(Vector3(xMm, 0f, 0f))
+                                    val pSouth = cam.project3DToImage(Vector3(xMm, 0f, roomD))
+                                    if (pNorth != null && pSouth != null) {
+                                        drawLine(
+                                            color = Color(0x5538BDF8),
+                                            start = pNorth,
+                                            end = pSouth,
+                                            strokeWidth = 1.2f
+                                        )
+                                    }
+                                    val pWest = cam.project3DToImage(Vector3(0f, 0f, zMm))
+                                    val pEast = cam.project3DToImage(Vector3(roomW, 0f, zMm))
+                                    if (pWest != null && pEast != null) {
+                                        drawLine(
+                                            color = Color(0x4438BDF8),
+                                            start = pWest,
+                                            end = pEast,
+                                            strokeWidth = 1.2f
+                                        )
+                                    }
                                 }
 
                                 if (mode == OverlayMode.CALIBRATE_PERSPECTIVE) {
@@ -855,26 +1010,40 @@ fun PerspectiveOverlayDialog(
 
                                     val pins = listOf(quadPins.frontLeft, quadPins.frontRight, quadPins.backRight, quadPins.backLeft)
                                     pins.forEach { pin ->
-                                        drawCircle(Color.White, radius = 10f, center = pin)
-                                        drawCircle(Color(0xFF0284C7), radius = 7f, center = pin)
+                                        drawCircle(Color.White, radius = 11f, center = pin)
+                                        drawCircle(Color(0xFF0284C7), radius = 7.5f, center = pin)
                                     }
                                 }
                             }
 
-                            // 5. Render 3D Cabinets with Automatic Perspective Scaling, Selection Highlight & Real-Time Dimension Pills
-                            val elements = state.project.elements.filter { it.isVisible }
-                            projectedCabinetCenters.clear()
-                            val is8KMode = mode == OverlayMode.IMAGE_TO_IMAGE_8K_RENDER
+                            // 5. Render 3D Cabinets Depth-Sorted Back-to-Front with Realistic Details & Dimension Pills
+                            val visibleElements = state.project.elements.filter { it.isVisible }
+                            val sortedElements = visibleElements.map { elem ->
+                                val center3D = elem.position + Vector3(0f, elem.dimensions.y * 0.5f, 0f)
+                                val dist = (center3D - cam.cameraPosition).length()
+                                Pair(elem, dist)
+                            }.sortedByDescending { it.second }
+
+                            arHitCache.projectedCabinetCenters.clear()
+                            arHitCache.projectedCabinetBounds.clear()
+                            arHitCache.frontToBackIds = sortedElements.asReversed().map { it.first.id }
+
+                            val collidingIds = state.collisionResult?.collidingElementIds?.toSet() ?: emptySet()
+                            val lightDir = Vector3(
+                                x = 0.38f,
+                                y = (0.85f * estimatedLightIntensity).coerceIn(0.45f, 1.0f),
+                                z = 0.36f
+                            ).normalized()
 
                             val dimLabelPaint = android.graphics.Paint().apply {
                                 color = android.graphics.Color.WHITE
-                                textSize = 19f
+                                textSize = 18f
                                 isAntiAlias = true
                                 textAlign = android.graphics.Paint.Align.CENTER
                                 isFakeBoldText = true
                             }
                             val dimPillBgPaint = android.graphics.Paint().apply {
-                                color = android.graphics.Color.argb(230, 15, 23, 42)
+                                color = android.graphics.Color.argb(225, 15, 23, 42)
                                 style = android.graphics.Paint.Style.FILL
                                 isAntiAlias = true
                             }
@@ -885,167 +1054,110 @@ fun PerspectiveOverlayDialog(
                                 isAntiAlias = true
                             }
 
-                            elements.forEach { elem ->
+                            sortedElements.forEach { (elem, _) ->
                                 val isSelected = elem.id in state.selectedElementIds
-                                val corners = elem.getOBB().getCorners()
-                                val projectedCorners = corners.map { cam.project3DToImage(it) }
+                                val isColliding = elem.id in collidingIds
 
-                                if (projectedCorners.all { it != null }) {
-                                    val pts = projectedCorners.map { it!! }
-                                    val centerScreen = pts.fold(Offset.Zero) { acc, p -> acc + p } / pts.size.toFloat()
-                                    projectedCabinetCenters[elem.id] = centerScreen
+                                val center3D = elem.position + Vector3(0f, elem.dimensions.y * 0.5f, 0f)
+                                val centerScreen = cam.project3DToImage(center3D)
+                                if (centerScreen != null) {
+                                    arHitCache.projectedCabinetCenters[elem.id] = centerScreen
+                                }
 
-                                    // Natural Cast & Contact Shadow on Floor/Wall Plane
-                                    val floorCorners = elem.getFloorCorners().map { cam.project3DToImage(it) }
-                                    if (floorCorners.all { it != null }) {
-                                        val shadowPath = Path().apply {
-                                            moveTo(floorCorners[0]!!.x, floorCorners[0]!!.y)
-                                            for (k in 1 until floorCorners.size) {
-                                                lineTo(floorCorners[k]!!.x, floorCorners[k]!!.y)
-                                            }
-                                            close()
-                                        }
-                                        drawPath(
-                                            shadowPath,
-                                            color = if (is8KMode) Color(0x99000000) else Color(0x66000000)
-                                        )
+                                // Compute full 2D projected bounding box across all 8 corners for touch hit-testing
+                                val aabb = elem.getAABB()
+                                val corners3D = listOf(
+                                    Vector3(aabb.min.x, aabb.min.y, aabb.min.z),
+                                    Vector3(aabb.max.x, aabb.min.y, aabb.min.z),
+                                    Vector3(aabb.max.x, aabb.min.y, aabb.max.z),
+                                    Vector3(aabb.min.x, aabb.min.y, aabb.max.z),
+                                    Vector3(aabb.min.x, aabb.max.y, aabb.min.z),
+                                    Vector3(aabb.max.x, aabb.max.y, aabb.min.z),
+                                    Vector3(aabb.max.x, aabb.max.y, aabb.max.z),
+                                    Vector3(aabb.min.x, aabb.max.y, aabb.max.z)
+                                )
+                                var minX = Float.POSITIVE_INFINITY
+                                var minY = Float.POSITIVE_INFINITY
+                                var maxX = Float.NEGATIVE_INFINITY
+                                var maxY = Float.NEGATIVE_INFINITY
+                                var validCount = 0
+                                for (c in corners3D) {
+                                    val pt = cam.project3DToImage(c)
+                                    if (pt != null) {
+                                        minX = min(minX, pt.x)
+                                        minY = min(minY, pt.y)
+                                        maxX = max(maxX, pt.x)
+                                        maxY = max(maxY, pt.y)
+                                        validCount++
                                     }
-
-                                    val faces = listOf(
-                                        listOf(0, 1, 5, 4), // Front
-                                        listOf(2, 3, 7, 6), // Back (omitted if !elem.hasBackPanel)
-                                        listOf(4, 5, 7, 6), // Top / Countertop
-                                        listOf(0, 2, 6, 4), // Left
-                                        listOf(1, 3, 7, 5)  // Right
+                                }
+                                if (validCount >= 2) {
+                                    val pad = 12f
+                                    arHitCache.projectedCabinetBounds[elem.id] = RectF(
+                                        minX - pad,
+                                        minY - pad,
+                                        maxX + pad,
+                                        maxY + pad
                                     )
+                                }
 
-                                    val isSmokedGlass = elem.material == MaterialFinish.SMOKED_GLASS_ALU ||
-                                            elem.type == KitchenElementType.TALL_GLASS_VITRINE_LED ||
-                                            elem.type == KitchenElementType.WALL_GLASS_DOOR ||
-                                            elem.type == KitchenElementType.WALL_GLASS_BLACK_FRAME
+                                // Render realistic 3D shaded cabinet with doors, handles, granite countertop & glass vitrines
+                                renderCabinetRealisticDetails(
+                                    elem = elem,
+                                    cameraEye = cam.cameraPosition,
+                                    lightDir = lightDir,
+                                    isSelected = isSelected,
+                                    project = { p: Vector3 -> cam.project3DWithDepth(p) },
+                                    isColliding = isColliding
+                                )
 
-                                    val baseColor = Color(elem.material.colorHex)
-
-                                    faces.forEachIndexed { fIdx, faceIdxList ->
-                                        if (fIdx == 1 && !elem.hasBackPanel) return@forEachIndexed
-
-                                        val pA = corners[faceIdxList[0]]
-                                        val pB = corners[faceIdxList[1]]
-                                        val pC = corners[faceIdxList[2]]
-                                        val normal = (pB - pA).cross(pC - pA).normalized()
-
-                                        val viewVec = (pA - cam.cameraPosition).normalized()
-                                        if (normal.dot(viewVec) < 0f) {
-                                            val facePath = Path().apply {
-                                                moveTo(pts[faceIdxList[0]].x, pts[faceIdxList[0]].y)
-                                                for (k in 1 until faceIdxList.size) {
-                                                    lineTo(pts[faceIdxList[k]].x, pts[faceIdxList[k]].y)
-                                                }
-                                                close()
-                                            }
-                                            val shade = (0.48f + 0.52f * max(0f, normal.y) * estimatedLightIntensity).coerceIn(0.32f, 1f)
-                                            val faceColor = if (isSmokedGlass && fIdx == 0) {
-                                                Color(0xFF0F172A).copy(alpha = if (is8KMode) 0.76f else 0.85f)
-                                            } else {
-                                                baseColor.copy(
-                                                    red = (baseColor.red * shade).coerceIn(0f, 1f),
-                                                    green = (baseColor.green * shade).coerceIn(0f, 1f),
-                                                    blue = (baseColor.blue * shade).coerceIn(0f, 1f),
-                                                    alpha = 0.96f
-                                                )
-                                            }
-                                            drawPath(facePath, color = faceColor)
-
-                                            if (isSelected) {
-                                                drawPath(
-                                                    facePath,
-                                                    color = Color(0xFF10B981),
-                                                    style = Stroke(width = 3f)
-                                                )
-                                            } else if (is8KMode && fIdx == 0) {
-                                                drawPath(
-                                                    facePath,
-                                                    color = Color(0xFFCBD5E1).copy(alpha = 0.65f * aluminumSpecularBoost),
-                                                    style = Stroke(width = 2.6f)
-                                                )
-                                                if (isSmokedGlass) {
-                                                    drawLine(
-                                                        color = Color.White.copy(alpha = 0.35f * blackGlassReflectionStrength),
-                                                        start = pts[faceIdxList[0]],
-                                                        end = pts[faceIdxList[2]],
-                                                        strokeWidth = 4f
-                                                    )
-                                                    drawLine(
-                                                        color = Color(0xFFFDE047).copy(alpha = 0.72f),
-                                                        start = pts[faceIdxList[1]],
-                                                        end = pts[faceIdxList[2]],
-                                                        strokeWidth = 3.2f
-                                                    )
-                                                }
-                                            } else {
-                                                drawPath(facePath, color = Color(0x66000000), style = Stroke(width = 1.3f))
-                                            }
-                                        }
+                                // Real-Time Dimension Pill on Camera 3D Cabinets
+                                if ((isSelected || showAllCameraDimensions) && centerScreen != null) {
+                                    val wMm = elem.dimensions.x.roundToInt()
+                                    val dMm = elem.dimensions.z.roundToInt()
+                                    val hMm = elem.dimensions.y.roundToInt()
+                                    val labelText = if (isSelected) {
+                                        "${elem.name}: ${wMm}×${dMm}×${hMm} مم (${wMm / 10}×${dMm / 10}×${hMm / 10} سم)"
+                                    } else {
+                                        "${wMm / 10}×${dMm / 10}×${hMm / 10} سم"
                                     }
-
-                                    // Countertop Rim
-                                    elem.countertopMaterial?.let { topMat ->
-                                        val topPath = Path().apply {
-                                            moveTo(pts[4].x, pts[4].y)
-                                            lineTo(pts[5].x, pts[5].y)
-                                            lineTo(pts[7].x, pts[7].y)
-                                            lineTo(pts[6].x, pts[6].y)
-                                            close()
-                                        }
-                                        drawPath(topPath, color = Color(topMat.colorHex).copy(alpha = 0.96f))
-                                        drawPath(topPath, color = Color(0xFF38BDF8), style = Stroke(width = 1.5f))
+                                    dimLabelPaint.textSize = if (isSelected) 18f else 14f
+                                    val tw = dimLabelPaint.measureText(labelText)
+                                    val clampedX = centerScreen.x.coerceIn(tw * 0.5f + 14f, canvasW - tw * 0.5f - 14f)
+                                    val clampedY = centerScreen.y.coerceIn(42f, canvasH - 20f)
+                                    val pillRect = RectF(
+                                        clampedX - tw / 2f - 10f,
+                                        clampedY - 32f,
+                                        clampedX + tw / 2f + 10f,
+                                        clampedY - 6f
+                                    )
+                                    dimPillBorderPaint.color = if (isSelected) {
+                                        android.graphics.Color.argb(255, 16, 185, 129)
+                                    } else {
+                                        android.graphics.Color.argb(180, 56, 189, 248)
                                     }
-
-                                    // Real-Time Dimension Pill on Camera 3D Cabinets
-                                    if (isSelected || showAllCameraDimensions) {
-                                        val wMm = elem.dimensions.x.roundToInt()
-                                        val dMm = elem.dimensions.z.roundToInt()
-                                        val hMm = elem.dimensions.y.roundToInt()
-                                        val labelText = if (isSelected) {
-                                            "${elem.name}: ${wMm}×${dMm}×${hMm} مم (${wMm / 10}×${dMm / 10}×${hMm / 10} سم)"
-                                        } else {
-                                            "${wMm / 10}×${dMm / 10}×${hMm / 10} سم"
-                                        }
-                                        dimLabelPaint.textSize = if (isSelected) 19f else 15f
-                                        val tw = dimLabelPaint.measureText(labelText)
-                                        val pillRect = RectF(
-                                            centerScreen.x - tw / 2f - 10f,
-                                            centerScreen.y - 34f,
-                                            centerScreen.x + tw / 2f + 10f,
-                                            centerScreen.y - 6f
-                                        )
-                                        dimPillBorderPaint.color = if (isSelected) {
-                                            android.graphics.Color.argb(255, 16, 185, 129)
-                                        } else {
-                                            android.graphics.Color.argb(180, 56, 189, 248)
-                                        }
-                                        drawContext.canvas.nativeCanvas.drawRoundRect(pillRect, 8f, 8f, dimPillBgPaint)
-                                        drawContext.canvas.nativeCanvas.drawRoundRect(pillRect, 8f, 8f, dimPillBorderPaint)
-                                        drawContext.canvas.nativeCanvas.drawText(
-                                            labelText,
-                                            centerScreen.x,
-                                            centerScreen.y - 14f,
-                                            dimLabelPaint
-                                        )
-                                    }
+                                    drawContext.canvas.nativeCanvas.drawRoundRect(pillRect, 8f, 8f, dimPillBgPaint)
+                                    drawContext.canvas.nativeCanvas.drawRoundRect(pillRect, 8f, 8f, dimPillBorderPaint)
+                                    drawContext.canvas.nativeCanvas.drawText(
+                                        labelText,
+                                        clampedX,
+                                        clampedY - 13f,
+                                        dimLabelPaint
+                                    )
                                 }
                             }
                         }
 
-                        // Live AR Camera Active Badge
-                        if (isLiveCameraStreamActive && hasCameraPermission) {
+                        // Live AR Camera Active Badge (shown whenever Live Mode is active)
+                        if (isLiveCameraStreamActive) {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(10.dp),
+                                    .padding(10.dp)
+                                    .testTag("live_camera_active_hud_badge"),
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xCC7F1D1D),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                                color = Color(0xCC064E3B),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -1056,10 +1168,10 @@ fun PerspectiveOverlayDialog(
                                         modifier = Modifier
                                             .size(8.dp)
                                             .clip(RoundedCornerShape(4.dp))
-                                            .background(Color(0xFFEF4444))
+                                            .background(Color(0xFF10B981))
                                     )
                                     Text(
-                                        text = "بث الكاميرا الفوري نشط (Real-Time Camera AR)",
+                                        text = "وضع التصميم المباشر بالكاميرا نشط (Live Camera Design Mode • 1mm CAD)",
                                         color = Color.White,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold
@@ -1091,6 +1203,52 @@ fun PerspectiveOverlayDialog(
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
+                                    // Direct X / Z / Y Nudge Controls on Camera View
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("X:", color = Color(0xFFEF4444), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(-50f, 0f, 0f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "X-", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(50f, 0f, 0f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "X+", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Z:", color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(0f, 0f, -50f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Z-", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(0f, 0f, 50f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Z+", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Y:", color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(0f, -50f, 0f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Y-", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(0f, 50f, 0f)) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Y+", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
                                     OutlinedButton(
                                         onClick = { onRotateSelected(90f) },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -1156,11 +1314,200 @@ fun PerspectiveOverlayDialog(
                                         Spacer(modifier = Modifier.width(3.dp))
                                         Text("تحويل وتعديل JSON", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                     }
+                                    Button(
+                                        onClick = { mode = OverlayMode.AR_MATERIAL_SWAPPER },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier
+                                            .height(28.dp)
+                                            .testTag("open_ar_material_swapper_btn")
+                                    ) {
+                                        Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("خامات AR + JSON", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
                                     IconButton(
                                         onClick = onDeleteSelected,
                                         modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(Icons.Default.Delete, contentDescription = "حذف", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+
+                        // AR Live Wood & Marble Swapper Overlay Bar (تعديل الخامة بالواقع المعزز مع تحديث ملف JSON فوراً)
+                        if (mode == OverlayMode.AR_MATERIAL_SWAPPER) {
+                            val targetElem = selectedElement ?: state.project.elements.firstOrNull()
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 44.dp, start = 10.dp, end = 10.dp)
+                                    .fillMaxWidth()
+                                    .testTag("ar_live_material_swapper_bar"),
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color(0xF00F172A),
+                                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFA855F7))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (targetElem != null) {
+                                                "🎨 تعديل الخامة بالواقع المعزز للوحدة: ${targetElem.name} (يحدّث JSON فوراً)"
+                                            } else {
+                                                "🎨 وجّه الكاميرا واضغط على أي خزانة لتغيير الخشب أو الرخام فوراً"
+                                            },
+                                            color = Color(0xFFE9D5FF),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        jsonStatusMessage?.let { msg ->
+                                            Text(
+                                                text = msg,
+                                                color = Color(0xFF34D399),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    if (targetElem != null) {
+                                        // 1. Wood & Acrylic Cabinet Finishes
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("الخشب/الواجهة:", color = Color(0xFFCBD5E1), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            val woodFinishes = listOf(
+                                                MaterialFinish.NATURAL_OAK,
+                                                MaterialFinish.WALNUT_DARK,
+                                                MaterialFinish.CHAMPAGNE_GLOSS,
+                                                MaterialFinish.CHARCOAL_MATTE,
+                                                MaterialFinish.WHITE_HIGH_GLOSS,
+                                                MaterialFinish.CAPPUCCINO_MATTE,
+                                                MaterialFinish.SAGE_GREEN,
+                                                MaterialFinish.SMOKED_GLASS_ALU
+                                            )
+                                            woodFinishes.forEach { finish ->
+                                                val isCurr = targetElem.material == finish
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (isCurr) Color(0xFF4C1D95) else Color(0xFF1E293B),
+                                                    border = androidx.compose.foundation.BorderStroke(
+                                                        width = if (isCurr) 1.5.dp else 1.dp,
+                                                        color = if (isCurr) Color(0xFFC084FC) else Color(0xFF334155)
+                                                    ),
+                                                    modifier = Modifier
+                                                        .clickable {
+                                                            onApplyArMaterialSwap(targetElem.id, finish, null)
+                                                            val updatedElem = targetElem.copy(material = finish)
+                                                            val syncedJson = JsonProjectExporter.serializeSingleElementToJsonString(
+                                                                elem = updatedElem,
+                                                                includeBoundingBoxes = true,
+                                                                prettyPrint = true
+                                                            )
+                                                            jsonEditorText = syncedJson
+                                                            try {
+                                                                val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                                                File(exportDir, "AR_Cabinet_${targetElem.id}.json").writeText(syncedJson, Charsets.UTF_8)
+                                                            } catch (_: Exception) {}
+                                                            jsonStatusMessage = "✓ تم تطبيق (${finish.name}) وتحديث ملف JSON فوراً"
+                                                        }
+                                                        .testTag("ar_swap_wood_${finish.id}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(Color(finish.colorHex), RoundedCornerShape(3.dp))
+                                                        )
+                                                        Text(
+                                                            text = finish.name,
+                                                            color = Color.White,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isCurr) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 2. Marble & Granite Countertop Finishes
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("الرخام/الجرانيت:", color = Color(0xFFCBD5E1), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            val marbleFinishes = listOf(
+                                                MaterialFinish.CARRARA_MARBLE,
+                                                MaterialFinish.BLACK_GRANITE,
+                                                MaterialFinish.CALACATTA_GOLD,
+                                                MaterialFinish.TERRAZZO
+                                            )
+                                            marbleFinishes.forEach { counterFinish ->
+                                                val isCurr = targetElem.countertopMaterial == counterFinish
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (isCurr) Color(0xFF065F46) else Color(0xFF1E293B),
+                                                    border = androidx.compose.foundation.BorderStroke(
+                                                        width = if (isCurr) 1.5.dp else 1.dp,
+                                                        color = if (isCurr) Color(0xFF34D399) else Color(0xFF334155)
+                                                    ),
+                                                    modifier = Modifier
+                                                        .clickable {
+                                                            onApplyArMaterialSwap(targetElem.id, null, counterFinish)
+                                                            val updatedElem = targetElem.copy(countertopMaterial = counterFinish)
+                                                            val syncedJson = JsonProjectExporter.serializeSingleElementToJsonString(
+                                                                elem = updatedElem,
+                                                                includeBoundingBoxes = true,
+                                                                prettyPrint = true
+                                                            )
+                                                            jsonEditorText = syncedJson
+                                                            try {
+                                                                val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                                                File(exportDir, "AR_Cabinet_${targetElem.id}.json").writeText(syncedJson, Charsets.UTF_8)
+                                                            } catch (_: Exception) {}
+                                                            jsonStatusMessage = "✓ تم تطبيق رخام (${counterFinish.name}) وتحديث ملف JSON فوراً"
+                                                        }
+                                                        .testTag("ar_swap_marble_${counterFinish.id}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(Color(counterFinish.colorHex), RoundedCornerShape(3.dp))
+                                                        )
+                                                        Text(
+                                                            text = counterFinish.name,
+                                                            color = Color.White,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isCurr) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1199,17 +1546,29 @@ fun PerspectiveOverlayDialog(
                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Button(
                                             onClick = {
+                                                val capturedBmp = try {
+                                                    val pv = liveCameraPreviewRef
+                                                    if (pv != null &&
+                                                        pv.previewStreamState.value == PreviewView.StreamState.STREAMING &&
+                                                        pv.width > 0 && pv.height > 0
+                                                    ) {
+                                                        pv.bitmap ?: roomPhotoBitmap
+                                                    } else {
+                                                        roomPhotoBitmap
+                                                    }
+                                                } catch (_: Exception) {
+                                                    roomPhotoBitmap
+                                                }
                                                 val scan = com.example.core.importer.CameraObjectScanner.analyzeCapturedBitmap(
-                                                    bitmap = roomPhotoBitmap
+                                                    bitmap = capturedBmp
                                                 )
-                                                val elemJson = JsonProjectExporter.serializeSingleElementToJsonString(
-                                                    elem = scan.element,
-                                                    includeBoundingBoxes = true,
+                                                val proJson = com.example.core.importer.CameraObjectScanner.serializeScanToProfessionalJson(
+                                                    analysis = scan,
                                                     prettyPrint = true
                                                 )
-                                                jsonEditorText = elemJson
-                                                onImportOrUpdateJson(elemJson)
-                                                jsonStatusMessage = scan.summaryAr
+                                                jsonEditorText = proJson
+                                                onImportOrUpdateJson(proJson)
+                                                jsonStatusMessage = "${scan.summaryAr} • JSON احترافي (CAD/BIM v2.0)"
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -1476,6 +1835,8 @@ fun PerspectiveOverlayDialog(
                                 "رندر Image-to-Image 8K: دمج واقعي يبرز لمعان الألمنيوم وانعكاس الزجاج الأسود والظلال الطبيعية"
                             OverlayMode.JSON_OBJECT_EDITOR ->
                                 "استورد كائنات بصيغة JSON أو حوّل أي خزانة في المشهد إلى كود JSON وعدّل أبعادها وخصائصها مباشرة"
+                            OverlayMode.AR_MATERIAL_SWAPPER ->
+                                "وجّه الكاميرا نحو أي خزانة مصممة واضغط لتبديل الخشب أو الرخام فوراً وتحديث ملف JSON الخاص بها تلقائياً"
                         },
                         color = Color(0xFF38BDF8),
                         fontSize = 11.sp,
@@ -1499,18 +1860,20 @@ fun PerspectiveOverlayDialog(
  */
 @Composable
 private fun LiveCameraPreviewLayer(
+    onPreviewReady: (PreviewView) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
         PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            onPreviewReady(this)
         }
     }
 

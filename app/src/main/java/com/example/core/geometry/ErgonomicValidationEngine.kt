@@ -415,14 +415,21 @@ object ErgonomicValidationEngine {
             for (other in elements) {
                 if (other.id == elem.id) continue
                 if (isCountertopInsertOn(other, elem)) continue
+                if (other.type == KitchenElementType.CEILING_CHANDELIER_MODERN ||
+                    other.type == KitchenElementType.CEILING_LINEAR_LED_PANEL ||
+                    other.type == KitchenElementType.RANGE_HOOD_BOX
+                ) continue
+                // Elevated wall/bridge cabinets (>= 1350mm) do not block floor base cabinets
+                if (elem.position.y < 500f && other.position.y >= 1350f) continue
 
                 val otherOBB = other.getOBB()
                 val otherBottomY = otherOBB.center.y - otherOBB.halfExtents.y
                 val otherTopY = otherOBB.center.y + otherOBB.halfExtents.y
 
-                // Require vertical overlap (> 80mm)
-                val verticalOverlap = min(elemTopY, otherTopY) - max(elemBottomY, otherBottomY)
-                if (verticalOverlap <= 80f) continue
+                // Require vertical overlap (> 120mm) in the main door-opening band
+                val effectiveElemTopY = min(elemTopY, elemBottomY + 2050f)
+                val verticalOverlap = min(effectiveElemTopY, otherTopY) - max(elemBottomY, otherBottomY)
+                if (verticalOverlap <= 120f) continue
 
                 // Project `other` floor corners into `elem`'s local frame (origin = obb.center)
                 var otherMinLocalX = Float.MAX_VALUE

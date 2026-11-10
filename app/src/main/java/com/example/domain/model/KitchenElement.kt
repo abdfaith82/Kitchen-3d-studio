@@ -7,7 +7,8 @@ import com.example.core.math.Vector3
 /**
  * Core kitchen cabinet or appliance entity.
  * Position (x, y, z) defines the center of the base contact footprint in millimeters.
- * Includes dynamic vertical linking (`linkedBaseElementId`) and 3D back-panel hollowing (`hasBackPanel`).
+ * Includes dynamic vertical linking (`linkedBaseElementId`), full 360° enclosure (`hasBackPanel`, `hasFullSidePanels`),
+ * and optional front/side photo design references (`frontPhotoUri`, `sidePhotoUri`, `sidePanelMaterial`).
  */
 data class KitchenElement(
     val id: String,
@@ -28,7 +29,12 @@ data class KitchenElement(
     val backGrooveInsetMm: Float = 10f, // Router rabbet/groove overlap (نسبة التداخل للمجرى / الريشة)
     val topStretcherWidthMm: Float = 100f, // Upper structural stretcher rail width (سخات الميلامين)
     val customBoardThicknessMm: Float = 18f, // Manual override for melamine board thickness
-    val customAluminumProfileMm: Float = 22f // Manual override for aluminum profile section size
+    val customAluminumProfileMm: Float = 22f, // Manual override for aluminum profile section size
+    val hasFullSidePanels: Boolean = true, // Full left/right structural side gable panels (جنب كامل يمين ويسار لتكون الخزانة كاملة من جميع الجهات)
+    val sidePanelMaterial: MaterialFinish? = null, // Optional distinct side panel material extracted from side photo
+    val frontPhotoUri: String? = null, // Front reference photo URI from PhotoCabinetDesigner
+    val sidePhotoUri: String? = null, // Side reference photo URI from PhotoCabinetDesigner
+    val customDivisionsCount: Int = 0 // Optional custom door/drawer division count override
 ) {
     /**
      * Computes the 3D Oriented Bounding Box for this element.

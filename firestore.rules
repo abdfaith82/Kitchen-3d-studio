@@ -1,0 +1,186 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny all paths not explicitly matched
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
+    }
+
+    function isNonNegativeNumber(val, maxVal) {
+      return (val is int || val is float) && val >= 0 && val <= maxVal;
+    }
+
+    function isBoundedNumber(val, minVal, maxVal) {
+      return (val is int || val is float) && val >= minVal && val <= maxVal;
+    }
+
+    function isValidKitchenDesign(data, userId) {
+      let keys = [
+        'userId',
+        'title',
+        'roomWidthCm',
+        'roomDepthCm',
+        'roomHeightCm',
+        'elementCount',
+        'totalCostUsd',
+        'materialsCostUsd',
+        'laborCostUsd',
+        'accessoriesCostUsd',
+        'primaryMaterialId',
+        'countertopMaterialId',
+        'projectJson',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.userId == userId
+        && isNonEmptyString(data.title, 200)
+        && isBoundedNumber(data.roomWidthCm, 100, 5000)
+        && isBoundedNumber(data.roomDepthCm, 100, 5000)
+        && isBoundedNumber(data.roomHeightCm, 150, 1000)
+        && isNonNegativeNumber(data.elementCount, 500)
+        && isNonNegativeNumber(data.totalCostUsd, 10000000)
+        && isNonNegativeNumber(data.materialsCostUsd, 10000000)
+        && isNonNegativeNumber(data.laborCostUsd, 10000000)
+        && isNonNegativeNumber(data.accessoriesCostUsd, 10000000)
+        && isNonEmptyString(data.primaryMaterialId, 100)
+        && isNonEmptyString(data.countertopMaterialId, 100)
+        && isNonEmptyString(data.projectJson, 500000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKitchenComponent(data, userId) {
+      let keys = [
+        'userId',
+        'designId',
+        'nameAr',
+        'category',
+        'typeName',
+        'widthCm',
+        'depthCm',
+        'heightCm',
+        'elevationCm',
+        'posXCm',
+        'posYCm',
+        'rotationDeg',
+        'materialId',
+        'unitPriceUsd',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.userId == userId
+        && isNonEmptyString(data.designId, 128)
+        && isNonEmptyString(data.nameAr, 200)
+        && isNonEmptyString(data.category, 64)
+        && isNonEmptyString(data.typeName, 100)
+        && isBoundedNumber(data.widthCm, 10, 1000)
+        && isBoundedNumber(data.depthCm, 10, 1000)
+        && isBoundedNumber(data.heightCm, 5, 600)
+        && isBoundedNumber(data.elevationCm, 0, 500)
+        && isBoundedNumber(data.posXCm, -2000, 5000)
+        && isBoundedNumber(data.posYCm, -2000, 5000)
+        && isBoundedNumber(data.rotationDeg, -360, 360)
+        && isNonEmptyString(data.materialId, 100)
+        && isNonNegativeNumber(data.unitPriceUsd, 1000000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId}/kitchen_designs/{designId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && isValidId(designId)
+        && isValidKitchenDesign(incoming(), userId)
+        && incoming().createdAt <= request.time
+        && incoming().updatedAt <= request.time;
+
+      allow update: if isOwner(userId)
+        && isValidId(designId)
+        && isValidKitchenDesign(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt <= request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'roomWidthCm',
+          'roomDepthCm',
+          'roomHeightCm',
+          'elementCount',
+          'totalCostUsd',
+          'materialsCostUsd',
+          'laborCostUsd',
+          'accessoriesCostUsd',
+          'primaryMaterialId',
+          'countertopMaterialId',
+          'projectJson',
+          'updatedAt'
+        ]);
+
+      allow delete: if isOwner(userId);
+    }
+
+    match /users/{userId}/kitchen_components/{componentId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && isValidId(componentId)
+        && isValidKitchenComponent(incoming(), userId)
+        && incoming().createdAt <= request.time
+        && incoming().updatedAt <= request.time;
+
+      allow update: if isOwner(userId)
+        && isValidId(componentId)
+        && isValidKitchenComponent(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt <= request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'designId',
+          'nameAr',
+          'category',
+          'typeName',
+          'widthCm',
+          'depthCm',
+          'heightCm',
+          'elevationCm',
+          'posXCm',
+          'posYCm',
+          'rotationDeg',
+          'materialId',
+          'unitPriceUsd',
+          'updatedAt'
+        ]);
+
+      allow delete: if isOwner(userId);
+    }
+  }
+}

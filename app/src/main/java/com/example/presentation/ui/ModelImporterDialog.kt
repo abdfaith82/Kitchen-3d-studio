@@ -171,7 +171,11 @@ fun ModelImporterDialog(
                 )
             )
             syncEditorFromElement(analysis.element)
-            statusBanner = analysis.summaryAr
+            editableJsonString = CameraObjectScanner.serializeScanToProfessionalJson(
+                analysis = analysis,
+                prettyPrint = true
+            )
+            statusBanner = "${analysis.summaryAr} • هيكل JSON هندسي احترافي (CAD/BIM & PBR v2.0)"
         } catch (e: Exception) {
             importResult = ImportResult.Error("تعذر تحليل صورة الكاميرا: ${e.localizedMessage}", e)
         } finally {
@@ -614,7 +618,13 @@ fun ModelImporterDialog(
                                     OutlinedButton(
                                         onClick = {
                                             val liveBitmap = try {
-                                                livePreviewViewRef?.bitmap
+                                                val pv = livePreviewViewRef
+                                                if (pv != null &&
+                                                    pv.previewStreamState.value == PreviewView.StreamState.STREAMING &&
+                                                    pv.width > 0 && pv.height > 0
+                                                ) {
+                                                    pv.bitmap
+                                                } else null
                                             } catch (_: Exception) {
                                                 null
                                             }
@@ -648,41 +658,65 @@ fun ModelImporterDialog(
                                     ) {
                                         if (hasCameraPermission) {
                                             val lifecycleOwner = LocalLifecycleOwner.current
-                                            AndroidView(
-                                                factory = { ctx ->
-                                                    PreviewView(ctx).apply {
-                                                        layoutParams = ViewGroup.LayoutParams(
-                                                            ViewGroup.LayoutParams.MATCH_PARENT,
-                                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                            val previewView = remember(context) {
+                                                PreviewView(context).apply {
+                                                    layoutParams = ViewGroup.LayoutParams(
+                                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                                    )
+                                                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                                                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                                                    livePreviewViewRef = this
+                                                }
+                                            }
+                                            DisposableEffect(lifecycleOwner, previewView) {
+                                                val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+                                                val mainExecutor = ContextCompat.getMainExecutor(context)
+                                                var cameraProvider: ProcessCameraProvider? = null
+                                                val listener = Runnable {
+                                                    try {
+                                                        cameraProvider = cameraProviderFuture.get()
+                                                        val preview = Preview.Builder().build().also {
+                                                            it.setSurfaceProvider(previewView.surfaceProvider)
+                                                        }
+                                                        cameraProvider?.unbindAll()
+                                                        cameraProvider?.bindToLifecycle(
+                                                            lifecycleOwner,
+                                                            CameraSelector.DEFAULT_BACK_CAMERA,
+                                                            preview
                                                         )
-                                                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                                                        livePreviewViewRef = this
-                                                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                                                        cameraProviderFuture.addListener({
-                                                            try {
-                                                                val provider = cameraProviderFuture.get()
-                                                                val preview = Preview.Builder().build().also {
-                                                                    it.setSurfaceProvider(surfaceProvider)
-                                                                }
-                                                                provider.unbindAll()
-                                                                provider.bindToLifecycle(
-                                                                    lifecycleOwner,
-                                                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                                                    preview
-                                                                )
-                                                            } catch (_: Exception) {
-                                                            }
-                                                        }, ContextCompat.getMainExecutor(ctx))
+                                                    } catch (_: Exception) {
                                                     }
-                                                },
+                                                }
+                                                cameraProviderFuture.addListener(listener, mainExecutor)
+                                                onDispose {
+                                                    try {
+                                                        cameraProvider?.unbindAll()
+                                                    } catch (_: Exception) {
+                                                    }
+                                                    if (livePreviewViewRef === previewView) {
+                                                        livePreviewViewRef = null
+                                                    }
+                                                }
+                                            }
+                                            AndroidView(
+                                                factory = { previewView },
                                                 modifier = Modifier.fillMaxSize()
                                             )
                                         }
 
-                                        // CAD Reticle Overlay
+                                        // Optical CAD Laser Reticle & Telemetry Overlay
                                         Canvas(modifier = Modifier.fillMaxSize()) {
-                                            val padX = size.width * 0.18f
-                                            val padY = size.height * 0.15f
+                                            if (!hasCameraPermission) {
+                                                // Architectural optical camera simulator backdrop when permission not yet granted
+                                                drawRect(
+                                                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                        colors = listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF0B1120))
+                                                    )
+                                                )
+                                            }
+                                            val padX = size.width * 0.16f
+                                            val padY = size.height * 0.14f
                                             val rectW = size.width - padX * 2f
                                             val rectH = size.height - padY * 2f
                                             drawRect(
@@ -694,12 +728,39 @@ fun ModelImporterDialog(
                                                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 8f), 0f)
                                                 )
                                             )
+                                            // Center crosshair
+                                            val cx = size.width * 0.5f
+                                            val cy = size.height * 0.5f
+                                            drawLine(Color(0xFF38BDF8), Offset(cx - 18f, cy), Offset(cx + 18f, cy), strokeWidth = 1.8f)
+                                            drawLine(Color(0xFF38BDF8), Offset(cx, cy - 18f), Offset(cx, cy + 18f), strokeWidth = 1.8f)
+                                        }
+
+                                        Surface(
+                                            color = Color(0xCC0F172A),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "LIVE CAD OPTICAL SCANNER • 1mm Precision • PBR Sampler",
+                                                color = Color(0xFF38BDF8),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
                                         }
 
                                         Button(
                                             onClick = {
                                                 val bmp = try {
-                                                    livePreviewViewRef?.bitmap
+                                                    val pv = livePreviewViewRef
+                                                    if (pv != null &&
+                                                        pv.previewStreamState.value == PreviewView.StreamState.STREAMING &&
+                                                        pv.width > 0 && pv.height > 0
+                                                    ) {
+                                                        pv.bitmap
+                                                    } else null
                                                 } catch (_: Exception) {
                                                     null
                                                 }
@@ -717,90 +778,156 @@ fun ModelImporterDialog(
                                         ) {
                                             Icon(Icons.Default.Camera, contentDescription = null, modifier = Modifier.size(15.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("مسح واستيراد الكائن الآن 📸", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text("مسح واستيراد الكائن كـ JSON احترافي 📸", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
 
-                                // Captured Camera Image & Extracted Material/Dimensions Preview
+                                // Professional CAD/BIM & PBR Camera Scan Specification Card
                                 latestCameraAnalysis?.let { scan ->
                                     Surface(
-                                        shape = RoundedCornerShape(10.dp),
+                                        shape = RoundedCornerShape(12.dp),
                                         color = Color(0xFF0F172A),
-                                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                                        border = BorderStroke(1.dp, Color(0xFF10B981)),
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .testTag("camera_scan_result_summary_card")
                                     ) {
-                                        Row(
+                                        Column(
                                             modifier = Modifier.padding(10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            // Thumbnail or Color Swatch Preview
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(64.dp)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(Color(scan.sampledColorHex))
-                                                    .border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(8.dp)),
-                                                contentAlignment = Alignment.Center
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                                             ) {
-                                                capturedCameraBitmap?.let { bmp ->
-                                                    Canvas(modifier = Modifier.fillMaxSize()) {
-                                                        drawImage(
-                                                            image = bmp.asImageBitmap(),
-                                                            dstOffset = IntOffset.Zero,
-                                                            dstSize = IntSize(size.width.toInt(), size.height.toInt())
+                                                // Thumbnail + 3D Isometric Wireframe Box Preview
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(72.dp)
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .background(Color(scan.sampledColorHex))
+                                                        .border(1.5.dp, Color(0xFF38BDF8), RoundedCornerShape(10.dp)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    capturedCameraBitmap?.let { bmp ->
+                                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                                            drawImage(
+                                                                image = bmp.asImageBitmap(),
+                                                                dstOffset = IntOffset.Zero,
+                                                                dstSize = IntSize(size.width.toInt(), size.height.toInt())
+                                                            )
+                                                            val b = scan.boundingBoxNormalized
+                                                            drawRect(
+                                                                color = Color(0xFF10B981),
+                                                                topLeft = Offset(size.width * b[0], size.height * b[1]),
+                                                                size = Size(
+                                                                    size.width * (b[2] - b[0]),
+                                                                    size.height * (b[3] - b[1])
+                                                                ),
+                                                                style = Stroke(width = 2.2f)
+                                                            )
+                                                        }
+                                                    } ?: Icon(
+                                                        Icons.Default.ViewInAr,
+                                                        contentDescription = null,
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(30.dp)
+                                                    )
+                                                }
+
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = scan.element.name,
+                                                            color = Color.White,
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.Bold
                                                         )
-                                                        val b = scan.boundingBoxNormalized
-                                                        drawRect(
-                                                            color = Color(0xFF10B981),
-                                                            topLeft = Offset(size.width * b[0], size.height * b[1]),
-                                                            size = Size(
-                                                                size.width * (b[2] - b[0]),
-                                                                size.height * (b[3] - b[1])
-                                                            ),
-                                                            style = Stroke(width = 2f)
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = Color(0xFF0D9488).copy(alpha = 0.25f),
+                                                            border = BorderStroke(1.dp, Color(0xFF14B8A6))
+                                                        ) {
+                                                            Text(
+                                                                text = "CAD/BIM JSON v2.0",
+                                                                color = Color(0xFF2DD4BF),
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                    Text(
+                                                        text = "الأبعاد الهندسية (1مم): ${scan.element.dimensions.x.roundToInt()}×${scan.element.dimensions.y.roundToInt()}×${scan.element.dimensions.z.roundToInt()} مم",
+                                                        color = Color(0xFF38BDF8),
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(Color(scan.sampledColorHex), CircleShape)
+                                                                .border(1.dp, Color.White, CircleShape)
+                                                        )
+                                                        Text(
+                                                            text = "خامة PBR: ${scan.matchedMaterial.name} • Roughness ${(scan.customCameraMaterial.roughness * 100).roundToInt()}%",
+                                                            color = Color(0xFF34D399),
+                                                            fontSize = 10.sp
                                                         )
                                                     }
-                                                } ?: Icon(
-                                                    Icons.Default.ViewInAr,
-                                                    contentDescription = null,
-                                                    tint = Color.White
-                                                )
+                                                }
                                             }
 
-                                            Column(
-                                                modifier = Modifier.weight(1f),
-                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                            // Professional CNC & Hardware Badges Row
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                Text(
-                                                    text = scan.element.name,
-                                                    color = Color.White,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                                Text(
-                                                    text = "الأبعاد المستنتجة (1مم): ${scan.element.dimensions.x.roundToInt()}×${scan.element.dimensions.y.roundToInt()}×${scan.element.dimensions.z.roundToInt()} مم",
-                                                    color = Color(0xFF38BDF8),
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = Color(0xFF1E293B)
                                                 ) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .size(12.dp)
-                                                            .background(Color(scan.sampledColorHex), CircleShape)
-                                                            .border(1.dp, Color.White, CircleShape)
-                                                    )
                                                     Text(
-                                                        text = "الخامة: ${scan.matchedMaterial.name}",
+                                                        text = "سماكة البدن: 18 مم CNC",
+                                                        color = Color(0xFFE2E8F0),
+                                                        fontSize = 9.sp,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                    )
+                                                }
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = Color(0xFF1E293B)
+                                                ) {
+                                                    Text(
+                                                        text = "بروفايل مقبض: Gola Aluminum",
+                                                        color = Color(0xFF38BDF8),
+                                                        fontSize = 9.sp,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                    )
+                                                }
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = Color(0xFF1E293B)
+                                                ) {
+                                                    Text(
+                                                        text = "مفصلات: Soft-Close 110°",
                                                         color = Color(0xFF34D399),
-                                                        fontSize = 10.sp
+                                                        fontSize = 9.sp,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                                                     )
                                                 }
                                             }

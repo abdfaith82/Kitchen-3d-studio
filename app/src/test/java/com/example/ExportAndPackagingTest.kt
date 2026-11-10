@@ -565,4 +565,42 @@ class ExportAndPackagingTest {
         )
         assertEquals("Reimported from elements-only JSON must restore 3 elements", 3, reimportedFromElements.elements.size)
     }
+
+    @Test
+    fun testProfessionalCameraScanJsonAndPeriodicAutoSaveSnapshot() {
+        // 1. Verify Professional Camera Scan -> JSON v2.0 schema & round-trip import
+        val scanAnalysis = com.example.core.importer.CameraObjectScanner.analyzeCapturedBitmap(
+            bitmap = null,
+            presetCategory = com.example.core.importer.CameraObjectScanner.CameraImportPresetCategory.BASE_CABINET,
+            customNameHint = "خزانة ممسوحة بالكاميرا"
+        )
+        val proJson = com.example.core.importer.CameraObjectScanner.serializeScanToProfessionalJson(
+            analysis = scanAnalysis,
+            prettyPrint = true
+        )
+        assertTrue("Professional JSON must include schema_version", proJson.contains("\"schema_version\": \"Kitchen3D_ProCameraCAD_v2.0\""))
+        assertTrue("Professional JSON must include cad_engineering_specs", proJson.contains("\"cad_engineering_specs\""))
+        assertTrue("Professional JSON must include pbr_material_signature", proJson.contains("\"pbr_material_signature\""))
+        assertTrue("Professional JSON must include camera_scan_telemetry", proJson.contains("\"camera_scan_telemetry\""))
+
+        val parsedElements = com.example.core.export.JsonProjectExporter.parseElementsFromJsonString(proJson)
+        assertEquals("Should parse 1 element from Professional Camera JSON", 1, parsedElements.size)
+        assertEquals("Element name should match", "خزانة ممسوحة بالكاميرا", parsedElements.first().name)
+
+        // 2. Verify Periodic Room Auto-Save Snapshot serialization & deserialization
+        val project = createSampleProject()
+        val snapshotEntity = com.example.data.local.autosave.ProjectAutoSaveManager.buildSnapshotEntity(
+            project = project,
+            intervalSeconds = 15,
+            trigger = com.example.data.local.autosave.AutoSaveTrigger.INTERVAL,
+            createRollingCheckpoint = true
+        )
+        assertEquals("INTERVAL", snapshotEntity.triggerType)
+        assertEquals(3, snapshotEntity.furnitureCount)
+        val (restoredProject, _) = com.example.data.local.autosave.ProjectAutoSaveManager.deserializeSnapshot(snapshotEntity)
+        assertEquals(project.id, restoredProject.id)
+        assertEquals(project.elements.size, restoredProject.elements.size)
+        assertEquals(project.room.widthMm, restoredProject.room.widthMm, 0.1f)
+    }
 }
+

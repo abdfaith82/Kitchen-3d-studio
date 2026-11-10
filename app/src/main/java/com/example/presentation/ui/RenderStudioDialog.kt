@@ -82,7 +82,8 @@ fun RenderStudioDialog(
         "استوديو الرندر السينمائي 4K",
         "الإضاءة والبيئة",
         "الكاميرا والعدسة",
-        "خامات PBR"
+        "خامات PBR",
+        "محرك ArchViz JSON"
     )
 
     val deviceSpec = remember { DeviceProfiler.profile(context) }
@@ -427,6 +428,16 @@ fun RenderStudioDialog(
                             currentQuality = qualityLevel,
                             onSelectQuality = { qualityLevel = it }
                         )
+                        4 -> ArchVizJsonPipelineTabContent(
+                            state = state,
+                            sunKelvin = sunKelvin,
+                            ledKelvin = ledKelvin,
+                            aperture = aperture,
+                            onTriggerRender = {
+                                selectedTab = 0
+                                triggerCinematicRender()
+                            }
+                        )
                     }
                 }
 
@@ -668,7 +679,10 @@ private fun Cinematic4KStudioMainScreen(
                         }
                     }
 
-                    // Viewport Canvas OR Rendered 4K Bitmap Display
+                    var isBeforeAfterSplitMode by remember { mutableStateOf(false) }
+                    var splitComparisonRatio by remember { mutableFloatStateOf(0.52f) }
+
+                    // Viewport Canvas OR Rendered 4K Bitmap Display (with Before/After Split Comparison support)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -676,14 +690,104 @@ private fun Cinematic4KStudioMainScreen(
                             .background(Color.Black)
                     ) {
                         if (showRenderedOutputView && lastResult != null) {
-                            Image(
-                                bitmap = lastResult.bitmap.asImageBitmap(),
-                                contentDescription = "الصورة السينمائية 4K المخرجة",
-                                contentScale = ContentScale.Fit,
+                            if (isBeforeAfterSplitMode) {
+                                // Base Layer: Live 3D CAD Viewport
+                                LiveCinematicPreviewCanvas(
+                                    state = state,
+                                    cameraYaw = previewYaw,
+                                    cameraPitch = previewPitch,
+                                    distanceFactor = previewDistanceFactor,
+                                    sunAzimuth = sunAzimuth,
+                                    sunElevation = sunElevation,
+                                    sunKelvin = sunKelvin,
+                                    isLedEnabled = isLedEnabled,
+                                    bloomIntensity = bloomIntensity,
+                                    vignetteStrength = vignetteStrength,
+                                    warmthShift = warmthShift,
+                                    cinematicLetterbox = cinematicLetterbox,
+                                    onOrbit = onOrbitPreview
+                                )
+                                // Overlay Right/Left Split: Ray-Traced 4K/8K Output
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(splitComparisonRatio.coerceIn(0.05f, 0.95f))
+                                        .clip(RoundedCornerShape(0.dp))
+                                ) {
+                                    Image(
+                                        bitmap = lastResult.bitmap.asImageBitmap(),
+                                        contentDescription = "الصورة السينمائية 4K المخرجة",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                // Split Divider Line & Labels
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .align(Alignment.TopCenter)
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xCC7C3AED)) {
+                                        Text(
+                                            "بعد: رندر واقعي PBR (${(splitComparisonRatio * 100).roundToInt()}%)",
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xCC0F172A)) {
+                                        Text(
+                                            "قبل: النموذج الهندسي 3D CAD",
+                                            color = Color(0xFF38BDF8),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                Slider(
+                                    value = splitComparisonRatio,
+                                    onValueChange = { splitComparisonRatio = it },
+                                    valueRange = 0.08f..0.92f,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth(0.65f)
+                                        .padding(bottom = 4.dp)
+                                        .testTag("before_after_split_slider")
+                                )
+                            } else {
+                                Image(
+                                    bitmap = lastResult.bitmap.asImageBitmap(),
+                                    contentDescription = "الصورة السينمائية 4K المخرجة",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .testTag("rendered_4k_image_preview")
+                                )
+                            }
+
+                            // Toggle Before/After Split Comparison Pill
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isBeforeAfterSplitMode) Color(0xFF7C3AED) else Color(0xCC0F172A),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC084FC)),
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .testTag("rendered_4k_image_preview")
-                            )
+                                    .align(Alignment.BottomStart)
+                                    .padding(10.dp)
+                                    .clickable { isBeforeAfterSplitMode = !isBeforeAfterSplitMode }
+                                    .testTag("toggle_before_after_split_btn")
+                            ) {
+                                Text(
+                                    text = if (isBeforeAfterSplitMode) "↔ مقارنة قبل/بعد (نشط)" else "↔ مقارنة قبل/بعد مع CAD",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                )
+                            }
                         } else {
                             LiveCinematicPreviewCanvas(
                                 state = state,
@@ -1535,3 +1639,213 @@ private fun CameraExposureTabContent(
         }
     }
 }
+
+@Composable
+private fun ArchVizJsonPipelineTabContent(
+    state: KitchenEditorUiState,
+    sunKelvin: Float,
+    ledKelvin: Float,
+    aperture: Float,
+    onTriggerRender: () -> Unit
+) {
+    val context = LocalContext.current
+    var focalLengthMm by remember { mutableIntStateOf(24) }
+    var conditioningScale by remember { mutableFloatStateOf(0.95f) }
+    var guidanceScale by remember { mutableFloatStateOf(7.5f) }
+    var denoisingStrength by remember { mutableFloatStateOf(0.65f) }
+    var copyFeedback by remember { mutableStateOf<String?>(null) }
+
+    val payload = remember(
+        state.project,
+        sunKelvin,
+        ledKelvin,
+        aperture,
+        focalLengthMm,
+        conditioningScale,
+        guidanceScale,
+        denoisingStrength
+    ) {
+        ArchVizPromptEngine.generateRenderPayload(
+            project = state.project,
+            focalLengthMm = focalLengthMm,
+            apertureFStop = aperture,
+            sunKelvin = sunKelvin,
+            ledKelvin = ledKelvin,
+            conditioningScale = conditioningScale.toDouble(),
+            guidanceScale = guidanceScale.toDouble(),
+            denoisingStrength = denoisingStrength.toDouble()
+        )
+    }
+
+    val jsonString = payload.jsonString
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("archviz_json_pipeline_tab"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF7C3AED))
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "محرك التصور المعماري الواقعي (ArchViz Image-to-Realism Pipeline)",
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFF3E8FF),
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                "الخطوات الهندسية الـ 4: القفل الهيكلي (Structural Lock) • إكساء PBR • فيزياء الإضاءة • محاكاة عدسة DSLR",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 11.sp
+                            )
+                        }
+                        Button(
+                            onClick = onTriggerRender,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CameraEnhance, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("رندر 4K/8K الآن", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // Lens & ControlNet Sliders
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("العدسة المعمارية (Tilt-Shift):", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        listOf(24, 35).forEach { mm ->
+                            val isSel = focalLengthMm == mm
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) Color(0xFF7C3AED) else Color(0xFF1E293B),
+                                modifier = Modifier.clickable { focalLengthMm = mm }
+                            ) {
+                                Text(
+                                    "${mm}mm f/${String.format("%.1f", aperture)}",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Conditioning Scale: ${String.format("%.2f", conditioningScale)}",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 10.sp
+                            )
+                            Slider(
+                                value = conditioningScale,
+                                onValueChange = { conditioningScale = it },
+                                valueRange = 0.50f..1.00f
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Guidance Scale: ${String.format("%.1f", guidanceScale)}",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 10.sp
+                            )
+                            Slider(
+                                value = guidanceScale,
+                                onValueChange = { guidanceScale = it },
+                                valueRange = 4.0f..12.0f
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Denoising Strength: ${String.format("%.2f", denoisingStrength)}",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 10.sp
+                            )
+                            Slider(
+                                value = denoisingStrength,
+                                onValueChange = { denoisingStrength = it },
+                                valueRange = 0.35f..0.85f
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Engineered JSON Output Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF050811)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "مخرجات JSON القياسية لمحرك الرندر المعماري (ControlNet + V-Ray / UE5 Prompt)",
+                            color = Color(0xFF38BDF8),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            copyFeedback?.let { msg ->
+                                Text(msg, color = Color(0xFF34D399), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("ArchViz_JSON", jsonString))
+                                    copyFeedback = "تم نسخ JSON ✓"
+                                },
+                                modifier = Modifier.testTag("copy_archviz_json_btn")
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color(0xFF38BDF8))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("نسخ JSON", color = Color(0xFF38BDF8), fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF0B1120),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(10.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = jsonString,
+                            color = Color(0xFFA7F3D0),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.testTag("archviz_json_output_text")
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

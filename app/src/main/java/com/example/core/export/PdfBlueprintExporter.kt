@@ -124,6 +124,106 @@ object PdfBlueprintExporter {
         return bitmap
     }
 
+    /**
+     * Renders a shaded 3D isometric architectural preview bitmap of the kitchen project
+     * for embedding in the exported PDF report.
+     */
+    fun render3DPreviewBitmap(
+        project: KitchenProject,
+        widthPx: Int = 800,
+        heightPx: Int = 500
+    ): Bitmap {
+        val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.rgb(15, 23, 42))
+
+        val roomW = project.room.widthMm.coerceAtLeast(1000f)
+        val roomD = project.room.depthMm.coerceAtLeast(1000f)
+        val roomH = project.room.heightMm.coerceAtLeast(1000f)
+        val scale = min(widthPx / (roomW + roomD), heightPx / (roomH + (roomW + roomD) * 0.55f)) * 0.78f
+        val originX = widthPx * 0.5f + (roomD - roomW) * 0.25f * scale
+        val originY = heightPx * 0.72f
+
+        fun iso(x: Float, y: Float, z: Float): CadPoint {
+            val sx = originX + (x - z) * 0.866f * scale
+            val sy = originY + (x + z) * 0.5f * scale - y * scale
+            return CadPoint(sx, sy)
+        }
+
+        // Draw floor polygon
+        val floorPaint = Paint().apply {
+            color = (project.room.floorMaterial.colorHex.toInt() or -0x1000000)
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+        val floorStroke = Paint().apply {
+            color = Color.rgb(56, 189, 248)
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+        val f0 = iso(0f, 0f, 0f)
+        val f1 = iso(roomW, 0f, 0f)
+        val f2 = iso(roomW, 0f, roomD)
+        val f3 = iso(0f, 0f, roomD)
+        val floorPath = Path().apply {
+            moveTo(f0.x, f0.y); lineTo(f1.x, f1.y); lineTo(f2.x, f2.y); lineTo(f3.x, f3.y); close()
+        }
+        canvas.drawPath(floorPath, floorPaint)
+        canvas.drawPath(floorPath, floorStroke)
+
+        // Sort elements back-to-front and draw isometric 3D boxes
+        val sortedElements = project.elements.filter { it.isVisible }
+            .sortedBy { it.position.x + it.position.z + it.position.y * 0.5f }
+
+        val boxStroke = Paint().apply {
+            color = Color.rgb(15, 23, 42)
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f
+            isAntiAlias = true
+        }
+        for (elem in sortedElements) {
+            val aabb = elem.getAABB()
+            val x0 = aabb.min.x; val x1 = aabb.max.x
+            val y0 = aabb.min.y; val y1 = aabb.max.y
+            val z0 = aabb.min.z; val z1 = aabb.max.z
+
+            val p001 = iso(x0, y0, z1); val p101 = iso(x1, y0, z1)
+            val p111 = iso(x1, y1, z1); val p011 = iso(x0, y1, z1)
+            val p100 = iso(x1, y0, z0); val p110 = iso(x1, y1, z0)
+            val p010 = iso(x0, y1, z0)
+
+            val baseColor = (elem.material.colorHex.toInt() or -0x1000000)
+            val topColor = ((elem.countertopMaterial ?: elem.material).colorHex.toInt() or -0x1000000)
+
+            val frontPaint = Paint().apply { color = baseColor; style = Paint.Style.FILL; isAntiAlias = true }
+            val sidePaint = Paint().apply { color = baseColor; alpha = 210; style = Paint.Style.FILL; isAntiAlias = true }
+            val topPaint = Paint().apply { color = topColor; style = Paint.Style.FILL; isAntiAlias = true }
+
+            val frontPath = Path().apply {
+                moveTo(p001.x, p001.y); lineTo(p101.x, p101.y); lineTo(p111.x, p111.y); lineTo(p011.x, p011.y); close()
+            }
+            val sidePath = Path().apply {
+                moveTo(p101.x, p101.y); lineTo(p100.x, p100.y); lineTo(p110.x, p110.y); lineTo(p111.x, p111.y); close()
+            }
+            val topPath = Path().apply {
+                moveTo(p011.x, p011.y); lineTo(p111.x, p111.y); lineTo(p110.x, p110.y); lineTo(p010.x, p010.y); close()
+            }
+            canvas.drawPath(frontPath, frontPaint); canvas.drawPath(frontPath, boxStroke)
+            canvas.drawPath(sidePath, sidePaint); canvas.drawPath(sidePath, boxStroke)
+            canvas.drawPath(topPath, topPaint); canvas.drawPath(topPath, boxStroke)
+        }
+
+        val titlePaint = Paint().apply {
+            color = Color.WHITE
+            textSize = 18f
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
+        canvas.drawText("3D ArchViz Render Preview • ${project.name}", 20f, 32f, titlePaint)
+        return bitmap
+    }
+
     private fun formatLengthUnit(mm: Float, useCm: Boolean): String {
         return if (useCm) {
             val cm = mm / 10f
@@ -801,7 +901,7 @@ object PdfBlueprintExporter {
         val altRowFill = Paint().apply { color = Color.rgb(248, 250, 252); style = Paint.Style.FILL }
         val gridLinePaint = Paint().apply { color = Color.rgb(226, 232, 240); strokeWidth = 0.6f }
 
-        bom.items.take(18).forEachIndexed { index, item ->
+        bom.items.take(12).forEachIndexed { index, item ->
             if (index % 2 == 1) {
                 canvas.drawRect(tableLeft, curY, tableLeft + tableWidth, curY + rowHeight, altRowFill)
             }
@@ -825,8 +925,51 @@ object PdfBlueprintExporter {
         }
         canvas.drawLine(tableLeft, curY, tableLeft + tableWidth, curY, gridLinePaint)
 
+        // Smart Internal Kitchen Accessories Table in PDF BOM
+        if (bom.matchedAccessories.isNotEmpty()) {
+            curY += 14f
+            canvas.drawText(
+                "مكتبة الإكسسوارات الداخلية الذكية المرتبطة بالوحدات (${bom.totalAccessoriesCount} قطعة):",
+                tableLeft,
+                curY,
+                sectionTitlePaint
+            )
+            curY += 8f
+            canvas.drawRect(tableLeft, curY, tableLeft + tableWidth, curY + rowHeight, headerFill)
+            val accHeaders = listOf("م", "اسم الإكسسوار الداخلي الذكي", "الكود", "العدد", "المقاس (مم)", "الوحدات المتوافقة", "التكلفة")
+            var accX = tableLeft
+            accHeaders.forEachIndexed { i, t ->
+                canvas.drawText(t, accX + 4f, curY + 12f, headerTextPaint)
+                accX += colWidths[i]
+            }
+            curY += rowHeight
+
+            bom.matchedAccessories.take(6).forEachIndexed { idx, acc ->
+                if (idx % 2 == 1) {
+                    canvas.drawRect(tableLeft, curY, tableLeft + tableWidth, curY + rowHeight, altRowFill)
+                }
+                canvas.drawLine(tableLeft, curY, tableLeft + tableWidth, curY, gridLinePaint)
+                var colX = tableLeft
+                val accValues = listOf(
+                    "${idx + 1}",
+                    acc.accessory.arabicName,
+                    acc.accessory.code,
+                    "${acc.quantity}",
+                    acc.accessory.dimensionsMm,
+                    acc.matchedCabinetNames.take(2).joinToString("، "),
+                    String.format(Locale.US, "$%.0f", acc.totalCostUsd)
+                )
+                accValues.forEachIndexed { cI, v ->
+                    canvas.drawText(v, colX + 4f, curY + 12f, cellTextPaint)
+                    colX += colWidths[cI]
+                }
+                curY += rowHeight
+            }
+            canvas.drawLine(tableLeft, curY, tableLeft + tableWidth, curY, gridLinePaint)
+        }
+
         if (report != null) {
-            curY += 16f
+            curY += 12f
             drawCostBreakdownBox(canvas, tableLeft, curY, tableWidth, report)
         }
     }

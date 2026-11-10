@@ -1,7 +1,9 @@
 package com.example.domain.repository
 
+import com.example.domain.model.InternalAccessoryType
 import com.example.domain.model.KitchenElement
 import com.example.domain.model.KitchenGroup
+import com.example.domain.model.MatchedAccessoryItem
 import com.example.domain.model.RoomStructure
 import kotlinx.coroutines.flow.Flow
 
@@ -11,7 +13,10 @@ data class BillOfMaterialsItem(
     val quantity: Int,
     val dimensionsMm: String,
     val finishName: String,
-    val categoryName: String
+    val categoryName: String,
+    val widthMm: Float = 600f,
+    val heightMm: Float = 850f,
+    val depthMm: Float = 600f
 )
 
 data class BillOfMaterials(
@@ -20,7 +25,13 @@ data class BillOfMaterials(
     val totalCabinetsCount: Int,
     val totalLinearMeters: Float, // in meters
     val countertopAreaSquareMeters: Float,
-    val generatedDate: String
+    val generatedDate: String,
+    val matchedAccessories: List<MatchedAccessoryItem> = emptyList(),
+    val totalAccessoriesCount: Int = 0,
+    val cabinetsEstimatedCostUsd: Float = 0f,
+    val countertopEstimatedCostUsd: Float = 0f,
+    val accessoriesEstimatedCostUsd: Float = 0f,
+    val totalEstimatedProjectCostUsd: Float = 0f
 )
 
 data class KitchenProject(
@@ -37,7 +48,10 @@ interface KitchenProjectRepository {
     suspend fun updateProject(project: KitchenProject)
     fun getSampleTemplates(): List<KitchenProject>
     suspend fun loadTemplate(templateId: String)
-    fun generateBillOfMaterials(project: KitchenProject): BillOfMaterials
+    fun generateBillOfMaterials(
+        project: KitchenProject,
+        enabledAccessoryIds: Set<String> = InternalAccessoryType.DEFAULT_ENABLED_IDS
+    ): BillOfMaterials
     suspend fun saveCameraState(projectId: String, cameraState: com.example.data.local.relation.SavedCameraState) {}
     fun getSavedCameraState(projectId: String): Flow<com.example.data.local.relation.SavedCameraState?> = kotlinx.coroutines.flow.flowOf(null)
     suspend fun saveAutoSaveSnapshot(

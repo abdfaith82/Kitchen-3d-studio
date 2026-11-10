@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.camera.CameraMode
 import com.example.domain.model.ElementCategory
 import com.example.domain.model.KitchenElementType
@@ -41,9 +44,22 @@ import kotlin.math.roundToInt
 @Composable
 fun KitchenStudioScreen(
     viewModel: KitchenEditorViewModel,
+    onSignOut: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                viewModel.triggerLifecycleAutoSave()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     var showTemplatesDialog by remember { mutableStateOf(false) }
     var exportStudioInitialTab by remember { mutableStateOf(ExportTab.PDF_BLUEPRINT) }
 
@@ -132,16 +148,59 @@ fun KitchenStudioScreen(
                     }
                 },
                 actions = {
-                    // Projects Manager (Room Offline Storage & JSON Export)
+                    // Live Automatic Total Cost Badge (حساب إجمالي التكلفة تلقائياً بناءً على الوحدات المختارة)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF064E3B),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .clickable { viewModel.openDialog(ActiveDialog.BillOfMaterialsDialog) }
+                            .testTag("top_bar_live_total_cost_badge")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PieChart,
+                                contentDescription = "توزيع التكاليف",
+                                tint = Color(0xFF34D399),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = String.format(java.util.Locale.US, "$%.0f", state.costDistribution.totalCostUsd),
+                                color = Color(0xFF34D399),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+
+                    // Projects Manager (Firestore Cloud Sync & Room Offline Storage)
                     IconButton(
                         onClick = { viewModel.openProjectsManager() },
                         modifier = Modifier.testTag("top_bar_open_projects_btn")
                     ) {
                         Icon(
                             Icons.Default.FolderSpecial,
-                            contentDescription = "إدارة المشاريع والتخزين المحلي Room",
+                            contentDescription = "إدارة المشاريع والمزامنة السحابية Firestore",
                             tint = Color(0xFF38BDF8)
                         )
+                    }
+
+                    if (onSignOut != null) {
+                        IconButton(
+                            onClick = onSignOut,
+                            modifier = Modifier.testTag("top_bar_sign_out_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Logout,
+                                contentDescription = "تسجيل الخروج من حساب Google",
+                                tint = Color(0xFFF87171)
+                            )
+                        }
                     }
 
                     // Clean Canvas Mode Toggle (إخفاء/إظهار جميع اللوحات العائمة لرؤية التصميم بالكامل)
@@ -165,6 +224,49 @@ fun KitchenStudioScreen(
                             if (state.isCollapsibleSidebarOpen) Icons.Default.ViewSidebar else Icons.Default.MenuOpen,
                             contentDescription = "طي/فتح اللوحة الجانبية النحيفة",
                             tint = if (state.isCollapsibleSidebarOpen) Color(0xFF34D399) else Color(0xFF94A3B8)
+                        )
+                    }
+
+                    // Gemini AI Kitchen Designer Button (Firebase AI Logic)
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.GeminiAiDesigner) },
+                        modifier = Modifier.testTag("open_gemini_ai_designer_button")
+                    ) {
+                        Icon(
+                            Icons.Default.AutoAwesome,
+                            contentDescription = "مهندس المطابخ الذكي بـ Gemini AI",
+                            tint = Color(0xFFC084FC)
+                        )
+                    }
+
+                    // Smart Internal Kitchen Accessories Library Button (Auto-BOM Link)
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.SmartAccessories) },
+                        modifier = Modifier.testTag("open_smart_accessories_button")
+                    ) {
+                        Icon(
+                            Icons.Default.Build,
+                            contentDescription = "مكتبة الإكسسوارات الداخلية الذكية",
+                            tint = Color(0xFFFBBF24)
+                        )
+                    }
+
+                    // Metric vs Imperial Unit System Switcher Pill
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF1E293B),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .clickable { viewModel.toggleUnitSystem() }
+                            .testTag("top_bar_unit_system_toggle_btn")
+                    ) {
+                        Text(
+                            text = if (state.unitSystem == com.example.core.units.MeasurementUnitSystem.METRIC) "📏 متري" else "📏 إمبراطوري",
+                            color = Color(0xFF7DD3FC),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
                         )
                     }
 
@@ -376,6 +478,24 @@ fun KitchenStudioScreen(
                         onClick = { viewModel.openDialog(ActiveDialog.Catalog) }
                     )
                     BottomStudioAction(
+                        icon = Icons.Default.PhotoCameraFront,
+                        label = "تصميم خزانة 360°",
+                        tag = "btn_open_photo_cabinet_designer",
+                        onClick = { viewModel.openDialog(ActiveDialog.PhotoCabinetDesigner) }
+                    )
+                    BottomStudioAction(
+                        icon = Icons.Default.AutoAwesome,
+                        label = "ذكاء Gemini",
+                        tag = "btn_open_gemini_ai_designer",
+                        onClick = { viewModel.openDialog(ActiveDialog.GeminiAiDesigner) }
+                    )
+                    BottomStudioAction(
+                        icon = Icons.Default.Build,
+                        label = "إكسسوارات ذكية",
+                        tag = "btn_open_smart_accessories",
+                        onClick = { viewModel.openDialog(ActiveDialog.SmartAccessories) }
+                    )
+                    BottomStudioAction(
                         icon = Icons.Default.ViewColumn,
                         label = "فيلر 1مم",
                         tag = "btn_open_cabinet_filler",
@@ -509,6 +629,18 @@ fun KitchenStudioScreen(
                         onExitWalk = { viewModel.setCameraMode(CameraMode.ORBIT) },
                         onResetPan = { viewModel.resetCameraPan() },
                         onOpenFillerTool = { viewModel.openDialog(ActiveDialog.CabinetFillerTool) },
+                        onOpenRenderStudio = { viewModel.openDialog(ActiveDialog.RenderStudio) },
+                        onToggleVrGyro = { viewModel.toggleVrGyroMode() },
+                        onToggleVrSplit = { viewModel.toggleVrStereoscopicSplit() },
+                        onToggleVrAutoWalk = { viewModel.toggleVrAutoWalk() },
+                        onToggleVrCameraSensor = { viewModel.toggleVrCameraSensorMode() },
+                        onUpdateVrCameraSensitivity = { sens -> viewModel.updateVrCameraSensitivity(sens) },
+                        onUpdateVrCameraSubMode = { subMode -> viewModel.updateVrCameraSubMode(subMode) },
+                        onUpdateLightingSimulation = { az, el, intensity ->
+                            viewModel.updateLightingSimulation(az, el, intensity)
+                        },
+                        onChangeWallFinish = { mat -> viewModel.changeWallFinish(mat) },
+                        onChangeFloorMaterial = { mat -> viewModel.changeFloorMaterial(mat) },
                         externalDragType = draggingCatalogType,
                         externalDragRootOffset = dragFingerRootOffset,
                         onExternalDragWorldUpdate = { xMm, zMm ->
@@ -603,6 +735,18 @@ fun KitchenStudioScreen(
                             onExitWalk = { viewModel.setCameraMode(CameraMode.ORBIT) },
                             onResetPan = { viewModel.resetCameraPan() },
                             onOpenFillerTool = { viewModel.openDialog(ActiveDialog.CabinetFillerTool) },
+                            onOpenRenderStudio = { viewModel.openDialog(ActiveDialog.RenderStudio) },
+                            onToggleVrGyro = { viewModel.toggleVrGyroMode() },
+                            onToggleVrSplit = { viewModel.toggleVrStereoscopicSplit() },
+                            onToggleVrAutoWalk = { viewModel.toggleVrAutoWalk() },
+                            onToggleVrCameraSensor = { viewModel.toggleVrCameraSensorMode() },
+                            onUpdateVrCameraSensitivity = { sens -> viewModel.updateVrCameraSensitivity(sens) },
+                            onUpdateVrCameraSubMode = { subMode -> viewModel.updateVrCameraSubMode(subMode) },
+                            onUpdateLightingSimulation = { az, el, intensity ->
+                                viewModel.updateLightingSimulation(az, el, intensity)
+                            },
+                            onChangeWallFinish = { mat -> viewModel.changeWallFinish(mat) },
+                            onChangeFloorMaterial = { mat -> viewModel.changeFloorMaterial(mat) },
                             externalDragType = draggingCatalogType,
                             externalDragRootOffset = dragFingerRootOffset,
                             onExternalDragWorldUpdate = { xMm, zMm ->
@@ -800,12 +944,9 @@ fun KitchenStudioScreen(
                     }
                 }
 
-                // Only show Ergonomic & Auto-Save status chips when control panels are expanded AND no sub-panel is open
+                // Always show Auto-Save status badge in CAD planning sessions (and Ergonomic chip when panels expanded)
                 AnimatedVisibility(
-                    visible = !state.isControlPanelsCollapsed &&
-                            !state.isCleanCanvasMode &&
-                            !state.isWallCreationMode &&
-                            !state.isFurniturePlacementMode
+                    visible = !state.isCleanCanvasMode
                 ) {
                     Row(
                         modifier = Modifier
@@ -818,14 +959,14 @@ fun KitchenStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            AutoSaveStatusBadge(
+                                autoSaveState = state.autoSaveState,
+                                onClick = { viewModel.openDialog(ActiveDialog.AutoSaveSettings) }
+                            )
                             ErgonomicStatusChip(
                                 report = state.validationReport,
                                 showOverlayOnCanvas = state.showErgonomicOverlay,
                                 onClick = { viewModel.openDialog(ActiveDialog.ErgonomicInspector) }
-                            )
-                            AutoSaveStatusBadge(
-                                autoSaveState = state.autoSaveState,
-                                onClick = { viewModel.openDialog(ActiveDialog.AutoSaveSettings) }
                             )
                         }
                     }
@@ -973,6 +1114,9 @@ fun KitchenStudioScreen(
                     exportStudioInitialTab = ExportTab.JSON_DATA
                     viewModel.openDialog(ActiveDialog.ExportStudio)
                 },
+                onOpenPhotoCabinetDesigner = {
+                    viewModel.openDialog(ActiveDialog.PhotoCabinetDesigner)
+                },
                 onDismiss = { viewModel.openDialog(null) }
             )
         }
@@ -1029,6 +1173,8 @@ fun KitchenStudioScreen(
         is ActiveDialog.BillOfMaterialsDialog -> {
             BillOfMaterialsDialog(
                 bom = state.billOfMaterials,
+                unitSystem = state.unitSystem,
+                onToggleUnitSystem = { viewModel.toggleUnitSystem() },
                 onDismiss = { viewModel.openDialog(null) }
             )
         }
@@ -1080,6 +1226,13 @@ fun KitchenStudioScreen(
                 },
                 onDeleteSelected = { viewModel.deleteSelectedElements() },
                 onCycleSelectedMaterial = { viewModel.cycleSelectedElementMaterial() },
+                onApplyArMaterialSwap = { elementId, cabinetFinish, countertopFinish ->
+                    viewModel.changeElementMaterialAndCountertop(
+                        elementId = elementId,
+                        cabinetMaterial = cabinetFinish,
+                        countertopMaterial = countertopFinish
+                    )
+                },
                 onImportOrUpdateJson = { jsonStr ->
                     viewModel.importProjectOrElementsFromJson(jsonStr).elements.size
                 },
@@ -1108,6 +1261,10 @@ fun KitchenStudioScreen(
             AluminumMelamineCalculatorDialog(
                 selectedElement = state.singleSelectedElement,
                 sceneCabinets = viewModel.getParametricCabinetsFromScene(),
+                initialMaterialDimensionsConfig = state.standardMaterialDimensionsConfig,
+                initialSavedSheetSizes = state.savedMelamineSheetSizes,
+                onUpdateMaterialDimensionsConfig = { config -> viewModel.updateStandardMaterialDimensionsConfig(config) },
+                onSaveCustomSheetSize = { sheetSize -> viewModel.saveCustomMelamineSheetSize(sheetSize) },
                 onCreateOrUpdateCabinetIn3D = { cab -> viewModel.applyParametricCabinet(cab) },
                 onOpenFullNestingOptimizer = { viewModel.openDialog(ActiveDialog.NestingOptimizer) },
                 onOpenAluminumBarNesting = { viewModel.openDialog(ActiveDialog.AluminumBarNesting) },
@@ -1184,6 +1341,59 @@ fun KitchenStudioScreen(
                 state = state,
                 onApplyFillerConfig = { config -> viewModel.applyAutomaticWallFillers(config) },
                 onRemoveWallFillers = { wallSide -> viewModel.removeWallFillers(wallSide) },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        is ActiveDialog.GeminiAiDesigner -> {
+            GeminiKitchenDesignDialog(
+                currentRoom = state.project.room,
+                unitSystem = state.unitSystem,
+                aiState = state.aiDesignState,
+                onGenerateDesign = { w, d, h, shape, style, island, notes ->
+                    viewModel.generateGeminiKitchenDesign(
+                        roomWidthMm = w,
+                        roomDepthMm = d,
+                        roomHeightMm = h,
+                        layoutShape = shape,
+                        stylePreference = style,
+                        includeIsland = island,
+                        customNotes = notes
+                    )
+                },
+                onApplyGeneratedProject = { generatedProject ->
+                    viewModel.applyImportedProject(generatedProject)
+                },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        is ActiveDialog.SmartAccessories -> {
+            SmartAccessoriesDialog(
+                elements = state.project.elements,
+                enabledAccessoryIds = state.enabledAccessoryIds,
+                onToggleAccessory = { id -> viewModel.toggleAccessoryEnabled(id) },
+                onEnableAllCompatible = { viewModel.enableAllCompatibleAccessories() },
+                onOpenBomDialog = { viewModel.openDialog(ActiveDialog.BillOfMaterialsDialog) },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        is ActiveDialog.PhotoCabinetDesigner -> {
+            PhotoCabinetDesignerDialog(
+                onCreateCustomCabinet = { customName, baseType, dimsMm, frontMat, sideMat, counterMat, hasBack, hasSides, boardThick, divs, frontUri, sideUri ->
+                    viewModel.addPhotoDesignedCabinet(
+                        customName = customName,
+                        baseType = baseType,
+                        dimensionsMm = dimsMm,
+                        frontMaterial = frontMat,
+                        sideMaterial = sideMat,
+                        countertopMaterial = counterMat,
+                        hasBackPanel = hasBack,
+                        hasFullSidePanels = hasSides,
+                        boardThicknessMm = boardThick,
+                        divisionsCount = divs,
+                        frontPhotoUri = frontUri,
+                        sidePhotoUri = sideUri
+                    )
+                },
                 onDismiss = { viewModel.openDialog(null) }
             )
         }

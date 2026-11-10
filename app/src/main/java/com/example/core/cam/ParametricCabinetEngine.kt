@@ -666,3 +666,72 @@ data class ParametricCabinet(
         }
     }
 }
+
+/**
+ * Standard factory Melamine / MDF board dimensions available in workshops.
+ */
+data class StandardMelamineSheetSize(
+    val id: String,
+    val titleAr: String,
+    val lengthMm: Float,
+    val widthMm: Float
+) {
+    val areaSqM: Float get() = (lengthMm * widthMm) / 1_000_000f
+
+    companion object {
+        val DEFAULT_SIZES = listOf(
+            StandardMelamineSheetSize(
+                id = "std_244_122",
+                titleAr = "قياسي عالمي 244×122 سم (2440×1220 مم)",
+                lengthMm = 2440f,
+                widthMm = 1220f
+            ),
+            StandardMelamineSheetSize(
+                id = "jumbo_280_207",
+                titleAr = "جامبو أوروبي 280×207 سم (2800×2070 مم)",
+                lengthMm = 2800f,
+                widthMm = 2070f
+            ),
+            StandardMelamineSheetSize(
+                id = "long_305_122",
+                titleAr = "لوح طويل 305×122 سم (3050×1220 مم)",
+                lengthMm = 3050f,
+                widthMm = 1220f
+            ),
+            StandardMelamineSheetSize(
+                id = "wide_244_183",
+                titleAr = "لوح عريض 244×183 سم (2440×1830 مم)",
+                lengthMm = 2440f,
+                widthMm = 1830f
+            ),
+            StandardMelamineSheetSize(
+                id = "med_210_170",
+                titleAr = "لوح متوسط 210×170 سم (2100×1700 مم)",
+                lengthMm = 2100f,
+                widthMm = 1700f
+            )
+        )
+    }
+}
+
+/**
+ * Workshop configuration for controlling the standard raw stock dimensions of
+ * Aluminum Profile Bars and Melamine / MDF Boards.
+ */
+data class StandardMaterialDimensionsConfig(
+    val melamineSheetLengthMm: Float = 2440f,
+    val melamineSheetWidthMm: Float = 1220f,
+    val melamineBoardThicknessMm: Float = 18f,
+    val backPanelThicknessMm: Float = 8f,
+    val sheetEdgeTrimMm: Float = 10f,
+    val woodSawKerfMm: Float = 3.2f,
+    val aluminumStandardBarLengthMm: Float = 6000f,
+    val aluminumProfileSectionMm: Float = 45f,
+    val aluminumWallThicknessMm: Float = 1.8f,
+    val aluminumSawKerfMm: Float = 4.0f,
+    val aluminumBarEndTrimMm: Float = 10f
+) {
+    val singleMelamineSheetAreaSqM: Float
+        get() = (melamineSheetLengthMm * melamineSheetWidthMm) / 1_000_000f
+}
+

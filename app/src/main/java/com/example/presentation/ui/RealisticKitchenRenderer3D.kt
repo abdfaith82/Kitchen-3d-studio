@@ -12,8 +12,19 @@ import com.example.domain.model.*
 import kotlin.math.*
 
 /**
+ * Architectural 3D Visualization (ArchViz) rendering style modes for the real-time 3D viewport.
+ */
+enum class ArchVizRenderMode(val labelAr: String, val badgeAr: String) {
+    PHOTOREAL_DAYLIGHT("واقعي PBR نهاري", "V-Ray Daylight"),
+    LUXURY_NIGHT_3000K("إضاءة ليلية 3000K", "Night 3000K LED"),
+    ARCHITECTURAL_CLAY("ماكيت معماري Clay", "Clay + AO Maquette"),
+    TECHNICAL_XRAY("مخطط شفاف X-Ray", "CAD Wireframe X-Ray")
+}
+
+/**
  * Photorealistic 3D architectural renderer for kitchen interiors, ceiling lighting,
- * glossy floor reflections, backsplash LED washes, and detailed cabinet sub-components.
+ * glossy floor reflections, backsplash LED washes, volumetric window sunbeams,
+ * directional cast shadows, and detailed cabinet sub-components.
  */
 object RealisticKitchenRenderer3D {
 
@@ -92,14 +103,25 @@ object RealisticKitchenRenderer3D {
     /**
      * 1. Renders the realistic floor slab with 600x600mm porcelain tiles, Calacatta marble veins,
      * real-time planar cabinet reflections, specular reflections of ceiling/under-cabinet lights,
-     * and multi-layer soft Ambient Occlusion (AO) contact shadows.
+     * window daylight sun patches, directional cast shadows, and multi-layer soft Ambient Occlusion (AO).
      */
     fun DrawScope.renderRealisticFloor(
         room: RoomStructure,
         elements: List<KitchenElement>,
-        project: (Vector3) -> Pair<Offset, Float>?
+        project: (Vector3) -> Pair<Offset, Float>?,
+        archVizMode: ArchVizRenderMode = ArchVizRenderMode.PHOTOREAL_DAYLIGHT
     ) {
-        val floorColor = Color(room.floorMaterial.colorHex)
+        val rawFloorColor = Color(room.floorMaterial.colorHex)
+        val floorColor = when (archVizMode) {
+            ArchVizRenderMode.ARCHITECTURAL_CLAY -> Color(0xFFDAD4C8)
+            ArchVizRenderMode.TECHNICAL_XRAY -> Color(0xFF0B1528)
+            ArchVizRenderMode.LUXURY_NIGHT_3000K -> rawFloorColor.copy(
+                red = (rawFloorColor.red * 0.62f).coerceIn(0f, 1f),
+                green = (rawFloorColor.green * 0.60f).coerceIn(0f, 1f),
+                blue = (rawFloorColor.blue * 0.65f).coerceIn(0f, 1f)
+            )
+            ArchVizRenderMode.PHOTOREAL_DAYLIGHT -> rawFloorColor
+        }
         val p00 = project(Vector3(0f, 0f, 0f))
         val p10 = project(Vector3(room.widthMm, 0f, 0f))
         val p11 = project(Vector3(room.widthMm, 0f, room.depthMm))
@@ -129,13 +151,13 @@ object RealisticKitchenRenderer3D {
             )
 
             // Subtle specular sheen across glossy porcelain floor
-            if (room.floorMaterial.roughness <= 0.28f) {
+            if (room.floorMaterial.roughness <= 0.28f && archVizMode != ArchVizRenderMode.ARCHITECTURAL_CLAY) {
                 drawPath(
                     floorPath,
                     brush = Brush.linearGradient(
                         colors = listOf(
                             Color.White.copy(alpha = 0.06f),
-                            Color(0xFFFFFBEB).copy(alpha = 0.20f),
+                            Color(0xFFFFFBEB).copy(alpha = if (archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K) 0.26f else 0.20f),
                             Color(0xFFBAE6FD).copy(alpha = 0.08f)
                         ),
                         start = p00.first,
@@ -145,10 +167,14 @@ object RealisticKitchenRenderer3D {
             }
 
             // Real-Time Planar Floor Reflections of Base & Tall Cabinets on Glossy Porcelain
-            if (room.floorMaterial.roughness <= 0.30f) {
+            if (room.floorMaterial.roughness <= 0.30f &&
+                (archVizMode == ArchVizRenderMode.PHOTOREAL_DAYLIGHT || archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K)
+            ) {
                 elements.filter { it.position.y <= 60f }.forEach { elem ->
                     val obb = elem.getOBB()
-                    val reflColor = Color(elem.material.colorHex).copy(alpha = 0.16f)
+                    val reflColor = Color(elem.material.colorHex).copy(
+                        alpha = if (archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K) 0.22f else 0.16f
+                    )
                     val fBL = frontPoint(obb, -0.48f, -0.48f, 4f).copy(y = 1.2f)
                     val fBR = frontPoint(obb, 0.48f, -0.48f, 4f).copy(y = 1.2f)
                     val reflReachMm = (elem.dimensions.y * 0.28f).coerceIn(140f, 380f)
@@ -163,6 +189,11 @@ object RealisticKitchenRenderer3D {
             }
 
             // 600mm Porcelain Tile Joints & Subtle Calacatta Gold/Grey Veins
+            val tileGridColor = when (archVizMode) {
+                ArchVizRenderMode.TECHNICAL_XRAY -> Color(0x4438BDF8)
+                ArchVizRenderMode.ARCHITECTURAL_CLAY -> Color(0x2864748B)
+                else -> Color(0x33475569)
+            }
             val tileStep = 600f
             var gx = tileStep
             while (gx < room.widthMm) {
@@ -170,7 +201,7 @@ object RealisticKitchenRenderer3D {
                     Vector3(gx, 1f, 0f),
                     Vector3(gx, 1f, room.depthMm),
                     project,
-                    Color(0x33475569),
+                    tileGridColor,
                     1.2f
                 )
                 gx += tileStep
@@ -181,14 +212,16 @@ object RealisticKitchenRenderer3D {
                     Vector3(0f, 1f, gz),
                     Vector3(room.widthMm, 1f, gz),
                     project,
-                    Color(0x33475569),
+                    tileGridColor,
                     1.2f
                 )
                 gz += tileStep
             }
 
-            // Calacatta Gold / Marble Veins on floor tiles
-            if (room.floorMaterial.id.contains("marble") || room.floorMaterial.id.contains("travertine") || room.floorMaterial.roughness <= 0.22f) {
+            // Calacatta Gold / Marble Veins on floor tiles (in Photoreal & Night modes)
+            if ((archVizMode == ArchVizRenderMode.PHOTOREAL_DAYLIGHT || archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K) &&
+                (room.floorMaterial.id.contains("marble") || room.floorMaterial.id.contains("travertine") || room.floorMaterial.roughness <= 0.22f)
+            ) {
                 var vx = 180f
                 while (vx < room.widthMm - 360f) {
                     var vz = 140f
@@ -213,10 +246,54 @@ object RealisticKitchenRenderer3D {
                 }
             }
 
+            // Window Daylight Sun Floor Patches (projected solar light shafts on the floor from any window opening)
+            if (archVizMode == ArchVizRenderMode.PHOTOREAL_DAYLIGHT || archVizMode == ArchVizRenderMode.ARCHITECTURAL_CLAY) {
+                room.walls.filter { it.isEnabled }.forEach { wall ->
+                    wall.openings.filter { it.type == OpeningType.WINDOW }.forEach { win ->
+                        val patchDepth = 1250f
+                        val skewShift = 220f
+                        val (s0, s1, s2, s3) = when (wall.side) {
+                            WallSide.NORTH -> listOf(
+                                Vector3(win.offsetMm + 40f, 1.8f, 120f),
+                                Vector3((win.offsetMm + win.widthMm - 40f).coerceAtMost(room.widthMm), 1.8f, 120f),
+                                Vector3((win.offsetMm + win.widthMm + skewShift).coerceAtMost(room.widthMm - 40f), 1.8f, (120f + patchDepth).coerceAtMost(room.depthMm - 40f)),
+                                Vector3((win.offsetMm + skewShift).coerceAtMost(room.widthMm - 80f), 1.8f, (120f + patchDepth).coerceAtMost(room.depthMm - 40f))
+                            )
+                            WallSide.SOUTH -> listOf(
+                                Vector3(win.offsetMm + 40f, 1.8f, room.depthMm - 120f),
+                                Vector3((win.offsetMm + win.widthMm - 40f).coerceAtMost(room.widthMm), 1.8f, room.depthMm - 120f),
+                                Vector3((win.offsetMm + win.widthMm - skewShift).coerceAtLeast(40f), 1.8f, (room.depthMm - 120f - patchDepth).coerceAtLeast(40f)),
+                                Vector3((win.offsetMm - skewShift).coerceAtLeast(40f), 1.8f, (room.depthMm - 120f - patchDepth).coerceAtLeast(40f))
+                            )
+                            WallSide.WEST -> listOf(
+                                Vector3(120f, 1.8f, win.offsetMm + 40f),
+                                Vector3(120f, 1.8f, (win.offsetMm + win.widthMm - 40f).coerceAtMost(room.depthMm)),
+                                Vector3((120f + patchDepth).coerceAtMost(room.widthMm - 40f), 1.8f, (win.offsetMm + win.widthMm + skewShift).coerceAtMost(room.depthMm - 40f)),
+                                Vector3((120f + patchDepth).coerceAtMost(room.widthMm - 40f), 1.8f, (win.offsetMm + skewShift).coerceAtMost(room.depthMm - 80f))
+                            )
+                            WallSide.EAST -> listOf(
+                                Vector3(room.widthMm - 120f, 1.8f, win.offsetMm + 40f),
+                                Vector3(room.widthMm - 120f, 1.8f, (win.offsetMm + win.widthMm - 40f).coerceAtMost(room.depthMm)),
+                                Vector3((room.widthMm - 120f - patchDepth).coerceAtLeast(40f), 1.8f, (win.offsetMm + win.widthMm + skewShift).coerceAtMost(room.depthMm - 40f)),
+                                Vector3((room.widthMm - 120f - patchDepth).coerceAtLeast(40f), 1.8f, (win.offsetMm + skewShift).coerceAtMost(room.depthMm - 80f))
+                            )
+                        }
+                        drawQuad3D(
+                            s0, s1, s2, s3,
+                            project = project,
+                            fillColor = Color(0x30FFFBEB),
+                            strokeColor = Color(0x22FEF08A),
+                            strokeWidth = 1f
+                        )
+                    }
+                }
+            }
+
             // Glossy Floor Specular Reflections of Ceiling Spotlights & Warm LEDs
-            if (room.floorMaterial.roughness <= 0.28f) {
+            if (room.floorMaterial.roughness <= 0.28f && archVizMode != ArchVizRenderMode.ARCHITECTURAL_CLAY && archVizMode != ArchVizRenderMode.TECHNICAL_XRAY) {
                 val spotCols = 3
                 val spotRows = 3
+                val haloAlpha = if (archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K) 0x44 else 0x28
                 for (r in 1..spotRows) {
                     for (c in 1..spotCols) {
                         val rx = (room.widthMm / (spotCols + 1)) * c
@@ -224,8 +301,8 @@ object RealisticKitchenRenderer3D {
                         val reflPt = project(Vector3(rx, 2f, rz))?.first
                         if (reflPt != null) {
                             drawCircle(
-                                color = Color(0x28FEF08A),
-                                radius = 32f,
+                                color = Color((haloAlpha shl 24) or 0xFEF08A),
+                                radius = if (archVizMode == ArchVizRenderMode.LUXURY_NIGHT_3000K) 42f else 32f,
                                 center = reflPt
                             )
                             drawCircle(
@@ -238,12 +315,33 @@ object RealisticKitchenRenderer3D {
                 }
             }
 
-            // Multi-Layer Soft Ambient Occlusion (AO) Contact Shadows underneath floor-standing cabinets
+            // Directional Soft Cast Shadows + Multi-Layer Soft Ambient Occlusion (AO) Contact Shadows underneath floor-standing cabinets
             elements.filter { it.position.y <= 50f }.forEach { elem ->
                 val corners = elem.getFloorCorners()
                 if (corners.size == 4) {
                     val cCenter = elem.position.copy(y = 2.0f)
-                    // Outer soft penumbra shadow
+                    // 1. Directional Sun Cast Shadow (skewed along opposite of solar light vector)
+                    if (archVizMode != ArchVizRenderMode.TECHNICAL_XRAY) {
+                        val shadowShiftX = (elem.dimensions.y * 0.09f).coerceIn(45f, 180f)
+                        val shadowShiftZ = (elem.dimensions.y * 0.08f).coerceIn(40f, 160f)
+                        val castCorners = corners.map { c ->
+                            Vector3(
+                                (c.x - shadowShiftX).coerceIn(0f, room.widthMm),
+                                1.9f,
+                                (c.z + shadowShiftZ).coerceIn(0f, room.depthMm)
+                            )
+                        }
+                        drawQuad3D(
+                            castCorners[0],
+                            castCorners[1],
+                            castCorners[2],
+                            castCorners[3],
+                            project = project,
+                            fillColor = if (archVizMode == ArchVizRenderMode.ARCHITECTURAL_CLAY) Color(0x360F172A) else Color(0x28020617)
+                        )
+                    }
+
+                    // 2. Outer soft penumbra shadow
                     val outerCorners = corners.map { c ->
                         val dir = (c - cCenter)
                         Vector3(c.x + dir.x * 0.08f, 2.0f, c.z + dir.z * 0.08f)
@@ -256,35 +354,37 @@ object RealisticKitchenRenderer3D {
                         project = project,
                         fillColor = Color(0x38020617)
                     )
-                    // Core contact AO shadow
+                    // 3. Core contact AO shadow
                     drawQuad3D(
                         corners[0].copy(y = 2.8f),
                         corners[1].copy(y = 2.8f),
                         corners[2].copy(y = 2.8f),
                         corners[3].copy(y = 2.8f),
                         project = project,
-                        fillColor = Color(0x78020617)
+                        fillColor = if (archVizMode == ArchVizRenderMode.ARCHITECTURAL_CLAY) Color(0x88020617) else Color(0x78020617)
                     )
                 }
             }
 
             // Wall-Floor Baseboard Ambient Occlusion Shadow Lines
-            drawLine3D(Vector3(0f, 3f, 0f), Vector3(room.widthMm, 3f, 0f), project, Color(0x66020617), 3.5f)
-            drawLine3D(Vector3(0f, 3f, 0f), Vector3(0f, 3f, room.depthMm), project, Color(0x66020617), 3.5f)
-            drawLine3D(Vector3(room.widthMm, 3f, 0f), Vector3(room.widthMm, 3f, room.depthMm), project, Color(0x66020617), 3.5f)
+            val aoColor = if (archVizMode == ArchVizRenderMode.TECHNICAL_XRAY) Color(0x8838BDF8) else Color(0x66020617)
+            drawLine3D(Vector3(0f, 3f, 0f), Vector3(room.widthMm, 3f, 0f), project, aoColor, 3.5f)
+            drawLine3D(Vector3(0f, 3f, 0f), Vector3(0f, 3f, room.depthMm), project, aoColor, 3.5f)
+            drawLine3D(Vector3(room.widthMm, 3f, 0f), Vector3(room.widthMm, 3f, room.depthMm), project, aoColor, 3.5f)
 
-            drawPath(floorPath, color = Color(0xFF475569), style = Stroke(width = 2f))
+            drawPath(floorPath, color = if (archVizMode == ArchVizRenderMode.TECHNICAL_XRAY) Color(0xFF38BDF8) else Color(0xFF475569), style = Stroke(width = 2f))
         }
     }
 
     /**
      * 2. Renders the gypsum drop ceiling, recessed warm spotlights, linear LED channels,
-     * vertical corner Ambient Occlusion, and Calacatta marble backsplash cladding with warm 3000K LED wash.
+     * volumetric window sunbeams, vertical corner Ambient Occlusion, and Calacatta marble backsplash cladding with warm 3000K LED wash.
      */
     fun DrawScope.renderCeilingAndBacksplashLighting(
         room: RoomStructure,
         elements: List<KitchenElement>,
-        project: (Vector3) -> Pair<Offset, Float>?
+        project: (Vector3) -> Pair<Offset, Float>?,
+        archVizMode: ArchVizRenderMode = ArchVizRenderMode.PHOTOREAL_DAYLIGHT
     ) {
         val h = room.heightMm
         val w = room.widthMm
@@ -536,10 +636,23 @@ object RealisticKitchenRenderer3D {
         lightDir: Vector3,
         isSelected: Boolean,
         project: (Vector3) -> Pair<Offset, Float>?,
-        isColliding: Boolean = false
+        isColliding: Boolean = false,
+        archVizMode: ArchVizRenderMode = ArchVizRenderMode.PHOTOREAL_DAYLIGHT
     ) {
         val obb = elem.getOBB()
-        val rawColor = Color(elem.material.colorHex)
+        val rawColor = when (archVizMode) {
+            ArchVizRenderMode.ARCHITECTURAL_CLAY -> Color(0xFFE6E1D7)
+            ArchVizRenderMode.TECHNICAL_XRAY -> Color(0xFF0F2942)
+            ArchVizRenderMode.LUXURY_NIGHT_3000K -> {
+                val c = Color(elem.material.colorHex)
+                c.copy(
+                    red = (c.red * 0.85f).coerceIn(0f, 1f),
+                    green = (c.green * 0.82f).coerceIn(0f, 1f),
+                    blue = (c.blue * 0.78f).coerceIn(0f, 1f)
+                )
+            }
+            ArchVizRenderMode.PHOTOREAL_DAYLIGHT -> Color(elem.material.colorHex)
+        }
         val baseColor = if (isColliding) {
             Color(
                 red = (rawColor.red * 0.45f + 0.55f).coerceIn(0f, 1f),
@@ -579,9 +692,22 @@ object RealisticKitchenRenderer3D {
                 elem.type == KitchenElementType.TALL_DOUBLE_VITRINE_LED ||
                 elem.type == KitchenElementType.WALL_GLASS_DOOR ||
                 elem.type == KitchenElementType.WALL_GLASS_BLACK_FRAME ||
-                elem.type == KitchenElementType.BRIDGE_GLASS_LED_90
+                elem.type == KitchenElementType.BRIDGE_GLASS_LED_90 ||
+                elem.type == KitchenElementType.WALL_CORNER_DIAGONAL_65
 
-        faces.forEachIndexed { faceIdx, idxList ->
+        val sideRawColor = elem.sidePanelMaterial?.let { Color(it.colorHex) } ?: baseColor
+        val sidePanelColor = if (isColliding) baseColor else sideRawColor
+
+        // Sort all 6 faces back-to-front by distance from cameraEye (Painter's algorithm)
+        // so that rotating 360° around any cabinet always renders a complete, solid 6-sided enclosure
+        // with full left/right side gable panels and a full rear back panel.
+        val sortedFaces = faces.mapIndexed { faceIdx, idxList ->
+            val center3D = (corners[idxList[0]] + corners[idxList[1]] + corners[idxList[2]] + corners[idxList[3]]) * 0.25f
+            val distSq = (center3D - cameraEye).lengthSquared()
+            Triple(faceIdx, idxList, distSq)
+        }.sortedByDescending { it.third }
+
+        sortedFaces.forEach { (faceIdx, idxList, _) ->
             // Section 4.3: If back panel is disabled (!elem.hasBackPanel), hollow out the back face in 3D immediately
             if (faceIdx == 2 && !elem.hasBackPanel) {
                 val hollowFramePath = Path().apply {
@@ -592,87 +718,132 @@ object RealisticKitchenRenderer3D {
                     close()
                 }
                 drawPath(hollowFramePath, color = if (isColliding) Color(0xFFEF4444) else Color(0xAA38BDF8), style = Stroke(width = 2.4f))
-                return@forEachIndexed
+                return@forEach
             }
 
-            val pA = corners[idxList[0]]
-            val pB = corners[idxList[1]]
-            val pC = corners[idxList[2]]
-            val faceNormal = (pB - pA).cross(pC - pA).normalized()
-            val viewVec = (pA - cameraEye).normalized()
+            val faceCenter = (corners[idxList[0]] + corners[idxList[1]] + corners[idxList[2]] + corners[idxList[3]]) * 0.25f
+            // Outward-pointing normal away from OBB center
+            val outwardNormal = (faceCenter - obb.center).normalized()
 
-            if (faceNormal.dot(viewVec) < 0.12f) {
-                val facePath = Path().apply {
-                    moveTo(pts[idxList[0]].x, pts[idxList[0]].y)
-                    for (i in 1 until idxList.size) {
-                        lineTo(pts[idxList[i]].x, pts[idxList[i]].y)
-                    }
+            val facePath = Path().apply {
+                moveTo(pts[idxList[0]].x, pts[idxList[0]].y)
+                for (i in 1 until idxList.size) {
+                    lineTo(pts[idxList[i]].x, pts[idxList[i]].y)
+                }
+                close()
+            }
+
+            // Physically inspired Lambert + Fresnel multi-stop gradient shading on all 6 faces
+            val nDotL = kotlin.math.abs(outwardNormal.dot(lightDir)).coerceIn(0.18f, 1.0f)
+            val ambient = if (elem.type.category == ElementCategory.BRIDGE_CABINET) 0.48f else 0.56f
+            val diffuse = 0.46f * nDotL
+            val sideFactor = when (faceIdx) {
+                2 -> 0.84f // Rear Back Panel (ظهر الخزانة الكامل)
+                4, 5 -> if (elem.hasFullSidePanels) 0.94f else 0.86f // Full Left/Right Side Gable Panels (جنب كامل يمين ويسار)
+                0 -> 0.72f // Bottom Carcass Panel
+                else -> 1.0f
+            }
+            val topShade = ((ambient + diffuse * 1.06f) * sideFactor).coerceIn(0.28f, 1.12f)
+            val bottomShade = (((ambient + diffuse) * 0.82f) * sideFactor).coerceIn(0.22f, 0.98f)
+            val faceAlpha = when {
+                archVizMode == ArchVizRenderMode.TECHNICAL_XRAY -> 0.28f
+                isGlassUnit && faceIdx == 3 -> 0.86f
+                else -> 1.0f
+            }
+
+            val activeFaceBaseColor = if (faceIdx == 4 || faceIdx == 5 || faceIdx == 2) sidePanelColor else baseColor
+
+            val topFaceColor = activeFaceBaseColor.copy(
+                red = (activeFaceBaseColor.red * topShade).coerceIn(0f, 1f),
+                green = (activeFaceBaseColor.green * topShade).coerceIn(0f, 1f),
+                blue = (activeFaceBaseColor.blue * topShade).coerceIn(0f, 1f),
+                alpha = faceAlpha
+            )
+            val bottomFaceColor = activeFaceBaseColor.copy(
+                red = (activeFaceBaseColor.red * bottomShade).coerceIn(0f, 1f),
+                green = (activeFaceBaseColor.green * bottomShade).coerceIn(0f, 1f),
+                blue = (activeFaceBaseColor.blue * bottomShade).coerceIn(0f, 1f),
+                alpha = faceAlpha
+            )
+
+            drawPath(
+                facePath,
+                brush = Brush.linearGradient(
+                    colors = listOf(topFaceColor, bottomFaceColor),
+                    start = pts[idxList[2]],
+                    end = pts[idxList[0]]
+                )
+            )
+
+            // Full Back Panel structural groove & stretcher details when viewing from behind (ظهر كامل محكم)
+            if (faceIdx == 2 && elem.hasBackPanel && archVizMode != ArchVizRenderMode.TECHNICAL_XRAY) {
+                val p0 = pts[idxList[0]]
+                val p1 = pts[idxList[1]]
+                val p2 = pts[idxList[2]]
+                val p3 = pts[idxList[3]]
+                val inset = 0.06f
+                val g0 = Offset(p0.x + (p2.x - p0.x) * inset, p0.y + (p2.y - p0.y) * inset)
+                val g1 = Offset(p1.x + (p3.x - p1.x) * inset, p1.y + (p3.y - p1.y) * inset)
+                val g2 = Offset(p2.x + (p0.x - p2.x) * inset, p2.y + (p0.y - p2.y) * inset)
+                val g3 = Offset(p3.x + (p1.x - p3.x) * inset, p3.y + (p1.y - p3.y) * inset)
+                val backGroovePath = Path().apply {
+                    moveTo(g0.x, g0.y)
+                    lineTo(g1.x, g1.y)
+                    lineTo(g2.x, g2.y)
+                    lineTo(g3.x, g3.y)
                     close()
                 }
+                drawPath(backGroovePath, color = Color(0x550F172A), style = Stroke(width = 1.6f))
+            }
 
-                // Physically inspired Lambert + Fresnel multi-stop gradient shading
-                val nDotL = max(0f, faceNormal.dot(lightDir))
-                val ambient = if (elem.type.category == ElementCategory.BRIDGE_CABINET) 0.46f else 0.54f
-                val diffuse = 0.50f * nDotL
-                val topShade = (ambient + diffuse * 1.08f).coerceIn(0.30f, 1.12f)
-                val bottomShade = ((ambient + diffuse) * 0.80f).coerceIn(0.22f, 0.96f)
-                val faceAlpha = if (isGlassUnit && faceIdx == 3) 0.86f else if (!elem.hasBackPanel && faceIdx == 3) 0.92f else 1.0f
-
-                val topFaceColor = baseColor.copy(
-                    red = (baseColor.red * topShade).coerceIn(0f, 1f),
-                    green = (baseColor.green * topShade).coerceIn(0f, 1f),
-                    blue = (baseColor.blue * topShade).coerceIn(0f, 1f),
-                    alpha = faceAlpha
+            // Full Left & Right Side Gable 18mm structural edge-banding highlight (جنب كامل يمين ويسار)
+            if ((faceIdx == 4 || faceIdx == 5) && elem.hasFullSidePanels && archVizMode != ArchVizRenderMode.TECHNICAL_XRAY) {
+                drawPath(
+                    facePath,
+                    color = Color(0x440F172A),
+                    style = Stroke(width = 2.0f)
                 )
-                val bottomFaceColor = baseColor.copy(
-                    red = (baseColor.red * bottomShade).coerceIn(0f, 1f),
-                    green = (baseColor.green * bottomShade).coerceIn(0f, 1f),
-                    blue = (baseColor.blue * bottomShade).coerceIn(0f, 1f),
-                    alpha = faceAlpha
-                )
+            }
 
+            // Red translucent collision / ergonomic clearance warning wash
+            if (isColliding) {
+                drawPath(facePath, color = Color(0x55EF4444))
+            }
+
+            // High-gloss specular reflection highlight for Acrylic / Glossy / Metallic doors & side gables
+            if (archVizMode != ArchVizRenderMode.ARCHITECTURAL_CLAY &&
+                archVizMode != ArchVizRenderMode.TECHNICAL_XRAY &&
+                (elem.material.roughness <= 0.26f || elem.material.metallic >= 0.4f) &&
+                (faceIdx == 3 || faceIdx == 4 || faceIdx == 5)
+            ) {
                 drawPath(
                     facePath,
                     brush = Brush.linearGradient(
-                        colors = listOf(topFaceColor, bottomFaceColor),
-                        start = pts[idxList[2]],
-                        end = pts[idxList[0]]
+                        colors = listOf(
+                            Color.White.copy(alpha = if (faceIdx == 3) 0.22f else 0.12f),
+                            Color.Transparent,
+                            Color(0xFFFFFBEB).copy(alpha = 0.08f)
+                        ),
+                        start = pts[idxList[0]],
+                        end = pts[idxList[2]]
                     )
                 )
-
-                // Red translucent collision / ergonomic clearance warning wash
-                if (isColliding) {
-                    drawPath(facePath, color = Color(0x55EF4444))
-                }
-
-                // High-gloss specular reflection highlight for Acrylic / Glossy / Metallic doors
-                if ((elem.material.roughness <= 0.26f || elem.material.metallic >= 0.4f) && faceIdx == 3) {
-                    drawPath(
-                        facePath,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.22f),
-                                Color.Transparent,
-                                Color(0xFFFFFBEB).copy(alpha = 0.10f)
-                            ),
-                            start = pts[idxList[0]],
-                            end = pts[idxList[2]]
-                        )
-                    )
-                }
-
-                val outlineColor = when {
-                    isColliding -> Color(0xFFEF4444)
-                    isSelected -> Color(0xFF06B6D4)
-                    else -> Color(0x660F172A)
-                }
-                val outlineWidth = when {
-                    isColliding -> 4.2f
-                    isSelected -> 3.4f
-                    else -> 1.3f
-                }
-                drawPath(facePath, color = outlineColor, style = Stroke(width = outlineWidth))
             }
+
+            val outlineColor = when {
+                isColliding -> Color(0xFFEF4444)
+                isSelected -> Color(0xFF06B6D4)
+                archVizMode == ArchVizRenderMode.TECHNICAL_XRAY -> Color(0xCC38BDF8)
+                archVizMode == ArchVizRenderMode.ARCHITECTURAL_CLAY -> Color(0x88475569)
+                else -> Color(0x660F172A)
+            }
+            val outlineWidth = when {
+                isColliding -> 4.2f
+                isSelected -> 3.4f
+                archVizMode == ArchVizRenderMode.TECHNICAL_XRAY -> 1.8f
+                else -> 1.4f
+            }
+            drawPath(facePath, color = outlineColor, style = Stroke(width = outlineWidth))
         }
 
         // Draw 3D Red Collision Hazard Perimeter & Diagonal Cross on Floor/Base when colliding
@@ -1357,12 +1528,33 @@ object RealisticKitchenRenderer3D {
                 )
             }
 
-            // --- STANDARD SINGLE, DOUBLE & TRIPLE DOOR CABINETS ---
+            // --- CORNER CABINETS (UPPER & LOWER) & STANDARD SINGLE, DOUBLE & TRIPLE DOOR CABINETS ---
             else -> {
                 val bottomV = if (elem.position.y <= 20f) -0.38f else -0.46f
                 val topV = 0.46f
 
                 when {
+                    elem.type.isCornerUnit -> {
+                        // L-Corner / Diagonal 45° Corner vertical recess & twin corner doors
+                        drawLine3D(frontPoint(obb, 0f, bottomV, 4.5f), frontPoint(obb, 0f, topV, 4.5f), project, Color(0xDD0F172A), 2.6f)
+                        drawLine3D(frontPoint(obb, -0.46f, topV, 4.5f), frontPoint(obb, 0f, topV - 0.06f, 4.5f), project, Color(0x8838BDF8), 1.8f)
+                        drawLine3D(frontPoint(obb, 0.46f, topV, 4.5f), frontPoint(obb, 0f, topV - 0.06f, 4.5f), project, Color(0x8838BDF8), 1.8f)
+                        val hV1 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.36f else 0.15f
+                        val hV2 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.15f else 0.36f
+                        drawLine3D(frontPoint(obb, -0.08f, hV1, 7f), frontPoint(obb, -0.08f, hV2, 7f), project, handleColor, 2.8f)
+                        drawLine3D(frontPoint(obb, 0.08f, hV1, 7f), frontPoint(obb, 0.08f, hV2, 7f), project, handleColor, 2.8f)
+                    }
+                    elem.customDivisionsCount >= 2 -> {
+                        val divs = elem.customDivisionsCount.coerceIn(2, 4)
+                        for (d in 1 until divs) {
+                            val u = -0.5f + (d.toFloat() / divs.toFloat())
+                            drawLine3D(frontPoint(obb, u, bottomV, 4f), frontPoint(obb, u, topV, 4f), project, Color(0xBB0F172A), 2.0f)
+                        }
+                        val hV1 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.36f else 0.15f
+                        val hV2 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.15f else 0.36f
+                        drawLine3D(frontPoint(obb, -0.06f, hV1, 7f), frontPoint(obb, -0.06f, hV2, 7f), project, handleColor, 2.8f)
+                        drawLine3D(frontPoint(obb, 0.06f, hV1, 7f), frontPoint(obb, 0.06f, hV2, 7f), project, handleColor, 2.8f)
+                    }
                     elem.dimensions.x >= 1100f -> {
                         // 3-Door Unit (120cm)
                         drawLine3D(frontPoint(obb, -0.166f, bottomV, 4f), frontPoint(obb, -0.166f, topV, 4f), project, Color(0xBB0F172A), 1.8f)
@@ -1379,7 +1571,7 @@ object RealisticKitchenRenderer3D {
                         }
                     }
                     else -> {
-                        // Single-Door Unit (30cm / 40cm / 60cm)
+                        // Single-Door Unit (15cm / 30cm / 40cm / 60cm)
                         val hV1 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.36f else 0.12f
                         val hV2 = if (elem.type.category == ElementCategory.WALL_CABINET) -0.14f else 0.36f
                         if (elem.type.category != ElementCategory.BRIDGE_CABINET) {

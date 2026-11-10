@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.command.CommandCategory
 import com.example.core.math.Vector3
+import com.example.core.units.MeasurementUnitSystem
 import com.example.domain.model.*
 import com.example.presentation.viewmodel.KitchenEditorUiState
 import kotlin.math.*
@@ -102,6 +103,16 @@ fun Viewport2D(
     // Expandable Command History Stack drawer in 2D viewport
     var showCommandHistoryPanel by remember { mutableStateOf(false) }
 
+    // Interactive Virtual Ruler (المسطرة الافتراضية الذكية) with 2 draggable pins A & B in world mm
+    var isVirtualRulerActive by remember { mutableStateOf(false) }
+    var rulerPinAMm by remember(room.widthMm, room.depthMm) {
+        mutableStateOf(Offset(room.widthMm * 0.25f, room.depthMm * 0.45f))
+    }
+    var rulerPinBMm by remember(room.widthMm, room.depthMm) {
+        mutableStateOf(Offset(room.widthMm * 0.75f, room.depthMm * 0.45f))
+    }
+    var activeDraggedRulerPin by remember { mutableStateOf<Char?>(null) }
+
     // Track active drag or resize state for committing undo command on release and sub-millimeter quantization
     var dragStartPos by remember { mutableStateOf<Vector3?>(null) }
     var dragStartRot by remember { mutableFloatStateOf(0f) }
@@ -151,6 +162,11 @@ fun Viewport2D(
             .fillMaxSize()
             .onGloballyPositioned { coords ->
                 viewportOriginInRoot = coords.positionInRoot()
+                val newW = coords.size.width.toFloat()
+                val newH = coords.size.height.toFloat()
+                if (newW > 1f && newH > 1f) {
+                    canvasSizePx = Offset(newW, newH)
+                }
             }
             .testTag("viewport_2d_canvas_container")
             .pointerInput(Unit) {
@@ -178,6 +194,24 @@ fun Viewport2D(
 
                         fun worldToScreen(xMm: Float, zMm: Float): Offset =
                             Offset(originX + xMm * baseScale, originY + zMm * baseScale)
+
+                        // 0. Hit-test Virtual Ruler Pins A & B first when Virtual Ruler is active
+                        if (isVirtualRulerActive) {
+                            val pinAScreen = worldToScreen(rulerPinAMm.x, rulerPinAMm.y)
+                            val pinBScreen = worldToScreen(rulerPinBMm.x, rulerPinBMm.y)
+                            val pinHitRadius = 42f
+                            when {
+                                (startOffset - pinAScreen).getDistance() <= pinHitRadius -> {
+                                    activeDraggedRulerPin = 'A'
+                                    return@detectDragGestures
+                                }
+                                (startOffset - pinBScreen).getDistance() <= pinHitRadius -> {
+                                    activeDraggedRulerPin = 'B'
+                                    return@detectDragGestures
+                                }
+                            }
+                        }
+                        activeDraggedRulerPin = null
 
                         // 1. First hit-test 2D Resize Handles on currently selected element
                         val currentSelected = latestElements.find { it.id in latestSelectedIds }
@@ -217,12 +251,14 @@ fun Viewport2D(
 
                         val worldXMm = (startOffset.x - originX) / baseScale
                         val worldZMm = (startOffset.y - originY) / baseScale
+                        val touchToleranceMm = (18f / baseScale.coerceAtLeast(0.001f)).coerceIn(20f, 120f)
 
-                        // 2. Hit-test furniture under drag start pointer (prioritize top-most / upper elements)
+                        // 2. Hit-test furniture under drag start pointer (prioritize currently selected or top-most element)
                         val hitElem = latestElements.lastOrNull { elem ->
                             val aabb = elem.getAABB()
-                            worldXMm in aabb.min.x..aabb.max.x && worldZMm in aabb.min.z..aabb.max.z
-                        } ?: latestElements.find { it.id in latestSelectedIds }
+                            worldXMm in (aabb.min.x - touchToleranceMm)..(aabb.max.x + touchToleranceMm) &&
+                                worldZMm in (aabb.min.z - touchToleranceMm)..(aabb.max.z + touchToleranceMm)
+                        }
 
                         if (hitElem != null && !hitElem.isLocked) {
                             if (hitElem.id !in latestSelectedIds) {
@@ -244,6 +280,7 @@ fun Viewport2D(
                         }
                     },
                     onDragEnd = {
+                        activeDraggedRulerPin = null
                         val elemId = draggingElemId
                         val startPos = dragStartPos
                         val startRot = dragStartRot
@@ -267,6 +304,7 @@ fun Viewport2D(
                         subMmAccumZ = 0f
                     },
                     onDragCancel = {
+                        activeDraggedRulerPin = null
                         val elemId = draggingElemId
                         val startPos = dragStartPos
                         val startRot = dragStartRot
@@ -291,6 +329,29 @@ fun Viewport2D(
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
+                        if (isVirtualRulerActive && activeDraggedRulerPin != null) {
+                            val canvasW = size.width.toFloat()
+                            val canvasH = size.height.toFloat()
+                            val marginPx = 60f
+                            val availableW = (canvasW - marginPx * 2f).coerceAtLeast(1f)
+                            val availableH = (canvasH - marginPx * 2f).coerceAtLeast(1f)
+                            val baseScale = min(availableW / latestRoom.widthMm, availableH / latestRoom.depthMm) * latestZoomScale
+                            val mmPerPixel = 1f / baseScale.coerceAtLeast(0.0001f)
+                            val dxMm = dragAmount.x * mmPerPixel
+                            val dzMm = dragAmount.y * mmPerPixel
+                            if (activeDraggedRulerPin == 'A') {
+                                rulerPinAMm = Offset(
+                                    (rulerPinAMm.x + dxMm).coerceIn(0f, latestRoom.widthMm),
+                                    (rulerPinAMm.y + dzMm).coerceIn(0f, latestRoom.depthMm)
+                                )
+                            } else if (activeDraggedRulerPin == 'B') {
+                                rulerPinBMm = Offset(
+                                    (rulerPinBMm.x + dxMm).coerceIn(0f, latestRoom.widthMm),
+                                    (rulerPinBMm.y + dzMm).coerceIn(0f, latestRoom.depthMm)
+                                )
+                            }
+                            return@detectDragGestures
+                        }
                         if ((isDraggingFurniture || isResizingFurniture) && draggingElemId != null) {
                             val canvasW = size.width.toFloat()
                             val canvasH = size.height.toFloat()
@@ -356,26 +417,26 @@ fun Viewport2D(
                     }
                 )
             }
-            .pointerInput(elements, state.isFurniturePlacementMode, room, zoomScale, panOffset) {
+            .pointerInput(state.isFurniturePlacementMode) {
                 detectTapGestures { tapPos ->
                     val canvasW = size.width.toFloat()
                     val canvasH = size.height.toFloat()
                     val marginPx = 60f
                     val availableW = (canvasW - marginPx * 2f).coerceAtLeast(1f)
                     val availableH = (canvasH - marginPx * 2f).coerceAtLeast(1f)
-                    val baseScale = min(availableW / room.widthMm, availableH / room.depthMm) * zoomScale
-                    val originX = canvasW * 0.5f - (room.widthMm * 0.5f * baseScale) + panOffset.x
-                    val originY = canvasH * 0.5f - (room.depthMm * 0.5f * baseScale) + panOffset.y
+                    val baseScale = min(availableW / latestRoom.widthMm, availableH / latestRoom.depthMm) * latestZoomScale
+                    val originX = canvasW * 0.5f - (latestRoom.widthMm * 0.5f * baseScale) + latestPanOffset.x
+                    val originY = canvasH * 0.5f - (latestRoom.depthMm * 0.5f * baseScale) + latestPanOffset.y
 
                     val worldXMm = round((tapPos.x - originX) / baseScale)
                     val worldZMm = round((tapPos.y - originY) / baseScale)
 
                     if (state.isFurniturePlacementMode) {
-                        if (worldXMm in 0f..room.widthMm && worldZMm in 0f..room.depthMm) {
+                        if (worldXMm in 0f..latestRoom.widthMm && worldZMm in 0f..latestRoom.depthMm) {
                             onPlaceFurnitureAt(worldXMm, worldZMm)
                         }
                     } else {
-                        val tappedElem = elements.lastOrNull { elem ->
+                        val tappedElem = latestElements.lastOrNull { elem ->
                             val aabb = elem.getAABB()
                             worldXMm in aabb.min.x..aabb.max.x && worldZMm in aabb.min.z..aabb.max.z
                         }
@@ -389,7 +450,6 @@ fun Viewport2D(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val canvasW = size.width
             val canvasH = size.height
-            canvasSizePx = Offset(canvasW, canvasH)
 
             // Calculate auto-fit scale: room bounds to screen canvas
             val marginPx = 60f
@@ -545,7 +605,7 @@ fun Viewport2D(
                 isAntiAlias = true
             }
             drawContext.canvas.nativeCanvas.drawText(
-                "${room.widthMm.toInt()} مم (${room.layoutShape.titleAr})",
+                "${MeasurementUnitSystem.formatLength(room.widthMm, state.unitSystem)} (${room.layoutShape.titleAr})",
                 (floorTopLeft.x + floorBottomRight.x) * 0.5f,
                 dimNorthY - 12f,
                 textPaint
@@ -558,7 +618,7 @@ fun Viewport2D(
             drawLine(dimColor, Offset(dimWestX - 8f, floorBottomRight.y), Offset(dimWestX + 8f, floorBottomRight.y), strokeWidth = 1.5f)
 
             drawContext.canvas.nativeCanvas.drawText(
-                "${room.depthMm.toInt()} مم",
+                MeasurementUnitSystem.formatLength(room.depthMm, state.unitSystem),
                 dimWestX - 16f,
                 (floorTopLeft.y + floorBottomRight.y) * 0.5f,
                 textPaint
@@ -584,7 +644,7 @@ fun Viewport2D(
                 val isSelected = elem.id in selectedIds
                 val isDirectlyColliding = (isSelected && activeCollision?.hasCollision == true) ||
                     elem.id in (activeCollision?.collidingElementIds ?: emptyList()) ||
-                    (isSelected && elem.id in criticalClearanceElementIds)
+                    elem.id in criticalClearanceElementIds
                 val affectedByIssue = state.validationReport.issues.any { elem.id in it.affectedElementIds }
                 val corners = elem.getFloorCorners()
                 val screenCorners = corners.map { worldMmToScreen(it.x, it.z) }
@@ -604,7 +664,7 @@ fun Viewport2D(
                 }
                 drawPath(elemPath, color = fillColor)
 
-                // Draw red diagonal hazard hatching lines inside colliding / clearance-violating cabinets
+                // Draw red diagonal hazard hatching lines + outer Red Bounding Box around colliding / clearance-violating cabinets
                 if (isDirectlyColliding && screenCorners.size >= 4) {
                     val minX = screenCorners.minOf { it.x }
                     val maxX = screenCorners.maxOf { it.x }
@@ -621,6 +681,17 @@ fun Viewport2D(
                         )
                         hx += hatchStep
                     }
+                    // Outer Red Bounding Box (مربع أحمر حول أي خزانة تتقاطع أو تنتهك المسافة الدنيا)
+                    val padPx = 6f
+                    drawRect(
+                        color = Color(0xFFEF4444),
+                        topLeft = Offset(minX - padPx, minY - padPx),
+                        size = Size((maxX - minX) + padPx * 2f, (maxY - minY) + padPx * 2f),
+                        style = Stroke(
+                            width = 3.2f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+                        )
+                    )
                 }
 
                 val strokeColor = when {
@@ -712,6 +783,27 @@ fun Viewport2D(
                         )
                         drawCircle(color = zoneColor, radius = 5f, center = endPt)
 
+                        // Draw 2D Door-Swing Clearance Arc on cabinet front
+                        val arcRadiusPx = (displayDepthMm * baseScale).coerceAtLeast(14f)
+                        val normalAngleDeg = Math.toDegrees(atan2(zone.frontNormal.z.toDouble(), zone.frontNormal.x.toDouble())).toFloat()
+                        drawArc(
+                            color = zoneColor.copy(alpha = 0.22f),
+                            startAngle = normalAngleDeg - 45f,
+                            sweepAngle = 90f,
+                            useCenter = true,
+                            topLeft = Offset(startPt.x - arcRadiusPx, startPt.y - arcRadiusPx),
+                            size = Size(arcRadiusPx * 2f, arcRadiusPx * 2f)
+                        )
+                        drawArc(
+                            color = zoneColor.copy(alpha = 0.75f),
+                            startAngle = normalAngleDeg - 45f,
+                            sweepAngle = 90f,
+                            useCenter = false,
+                            topLeft = Offset(startPt.x - arcRadiusPx, startPt.y - arcRadiusPx),
+                            size = Size(arcRadiusPx * 2f, arcRadiusPx * 2f),
+                            style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f))
+                        )
+
                         if (zone.isInsufficient) {
                             val midPt = Offset((startPt.x + endPt.x) * 0.5f, (startPt.y + endPt.y) * 0.5f)
                             val clearancePaint = Paint().apply {
@@ -726,7 +818,7 @@ fun Viewport2D(
                                 isFakeBoldText = true
                             }
                             drawContext.canvas.nativeCanvas.drawText(
-                                "⚠ خلوص ${(zone.availableClearanceMm / 10f).toInt()} سم",
+                                "⚠ خلوص فتح الباب ${MeasurementUnitSystem.formatLength(zone.availableClearanceMm, state.unitSystem)}",
                                 midPt.x,
                                 midPt.y - 6f,
                                 clearancePaint
@@ -1135,6 +1227,66 @@ fun Viewport2D(
                     textSizePx = 20f
                 )
             }
+
+            // 8C. Draw Interactive Virtual Ruler (المسطرة الافتراضية الذكية) with Draggable Pins A & B
+            if (isVirtualRulerActive) {
+                val pA = worldMmToScreen(rulerPinAMm.x, rulerPinAMm.y)
+                val pB = worldMmToScreen(rulerPinBMm.x, rulerPinBMm.y)
+                val dxMm = abs(rulerPinBMm.x - rulerPinAMm.x)
+                val dzMm = abs(rulerPinBMm.y - rulerPinAMm.y)
+                val distMm = hypot(dxMm, dzMm)
+
+                // Dashed orthogonal ΔX / ΔZ helper lines
+                val cornerPt = Offset(pB.x, pA.y)
+                drawLine(
+                    color = Color(0x88FBBF24),
+                    start = pA,
+                    end = cornerPt,
+                    strokeWidth = 2f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                )
+                drawLine(
+                    color = Color(0x88FBBF24),
+                    start = cornerPt,
+                    end = pB,
+                    strokeWidth = 2f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                )
+
+                // Main ruler line with graduation ticks
+                drawLine(
+                    color = Color(0xFFF59E0B),
+                    start = pA,
+                    end = pB,
+                    strokeWidth = 4f
+                )
+                drawCircle(color = Color(0xFF0F172A), radius = 14f, center = pA)
+                drawCircle(color = Color(0xFFF59E0B), radius = 11f, center = pA)
+                drawCircle(color = Color(0xFF0F172A), radius = 14f, center = pB)
+                drawCircle(color = Color(0xFF10B981), radius = 11f, center = pB)
+
+                val pinPaint = Paint().apply {
+                    color = android.graphics.Color.BLACK
+                    textSize = 16f
+                    textAlign = Paint.Align.CENTER
+                    isAntiAlias = true
+                    isFakeBoldText = true
+                }
+                drawContext.canvas.nativeCanvas.drawText("A", pA.x, pA.y + 5f, pinPaint)
+                drawContext.canvas.nativeCanvas.drawText("B", pB.x, pB.y + 5f, pinPaint)
+
+                val midRuler = Offset((pA.x + pB.x) * 0.5f, (pA.y + pB.y) * 0.5f - 24f)
+                val metricStr = MeasurementUnitSystem.formatLength(distMm, MeasurementUnitSystem.METRIC, preferCmInMetric = true)
+                val imperialStr = MeasurementUnitSystem.formatLength(distMm, MeasurementUnitSystem.IMPERIAL)
+                drawCadDimensionPill(
+                    center = midRuler,
+                    text = "📏 المسطرة: $metricStr ($imperialStr) | ΔX:${dxMm.roundToInt()} ΔZ:${dzMm.roundToInt()} مم",
+                    bgColor = Color(0xF5451A03),
+                    borderColor = Color(0xFFFBBF24),
+                    textColorInt = android.graphics.Color.rgb(254, 243, 199),
+                    textSizePx = 20f
+                )
+            }
         }
 
         // 9. Top-Start Floating 2D CAD 1mm Precision, Undo/Redo Command Stack & Layout Controls HUD
@@ -1446,6 +1598,24 @@ fun Viewport2D(
                     Text(
                         text = if (showAllCabinetDimensions2D) "📏 الأبعاد: الكل" else "📏 الأبعاد: المحدد",
                         color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Toggle Interactive Virtual Ruler (المسطرة الافتراضية الذكية)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isVirtualRulerActive) Color(0xFFD97706) else Color(0xFF1E293B))
+                        .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(6.dp))
+                        .clickable { isVirtualRulerActive = !isVirtualRulerActive }
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .testTag("floorplan_2d_virtual_ruler_btn")
+                ) {
+                    Text(
+                        text = if (isVirtualRulerActive) "📐 المسطرة الذكية: نشطة" else "📐 المسطرة الافتراضية",
+                        color = if (isVirtualRulerActive) Color.White else Color(0xFFFDE68A),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )

@@ -1,7 +1,10 @@
 package com.example.presentation.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,12 +14,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -24,14 +29,28 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
+import com.example.data.remote.KitchenCostCalculator
 import com.example.domain.model.ElementCategory
 import com.example.domain.model.KitchenElementType
+import java.util.Locale
 
-import androidx.compose.material.icons.filled.DataObject
+enum class CatalogTextureBackground(
+    val id: String,
+    val titleAr: String,
+    val drawableRes: Int?
+) {
+    NONE("dark_cad", "خلفية CAD داكنة", null),
+    CARRARA_MARBLE("marble", "رخام كرارا إيطالي", R.drawable.img_texture_carrara_marble_1794207893112),
+    NATURAL_OAK("oak_wood", "خشب بلوط أوروبي", R.drawable.img_texture_natural_oak_wood_1794207893591),
+    BLACK_GALAXY("granite", "جرانيت جالاكسي أسود", R.drawable.img_texture_black_galaxy_granite_1794207894395)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,14 +59,20 @@ fun CatalogBottomSheet(
     onDismiss: () -> Unit,
     onSelectForDragPlacement: ((KitchenElementType) -> Unit)? = null,
     onExportJson: (() -> Unit)? = null,
+    onOpenPhotoCabinetDesigner: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedCategory by remember { mutableStateOf<ElementCategory?>(null) } // null = All or selected
     var activeCategory by remember { mutableStateOf(ElementCategory.BASE_CABINET) }
     var searchQuery by remember { mutableStateOf("") }
     var showAllCategories by remember { mutableStateOf(false) }
+    var showCornersOnly by remember { mutableStateOf(false) }
+    var showDrawersOnly by remember { mutableStateOf(false) }
+    var selectedTextureBg by remember { mutableStateOf(CatalogTextureBackground.NATURAL_OAK) }
 
     val allUnits = remember { KitchenElementType.values().toList() }
+    val cornerCount = remember(allUnits) { allUnits.count { it.isCornerUnit } }
+    val drawerCount = remember(allUnits) { allUnits.count { it.code.contains("drawer") } }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -69,7 +94,7 @@ fun CatalogBottomSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "المكتبة الشاملة للخزائن والوحدات",
+                            text = "المكتبة الشاملة للخزائن والكورنرات",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -89,7 +114,7 @@ fun CatalogBottomSheet(
                         }
                     }
                     Text(
-                        text = "خزائن سفلية، علوية، تاج للسقف، فيترينة LED، أعمدة نيش وأجهزة",
+                        text = "خزائن سفلية، علوية، كورنرات علوية وسفلية، تاج للسقف، فيترينة LED وأجهزة",
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
                     )
@@ -98,6 +123,21 @@ fun CatalogBottomSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (onOpenPhotoCabinetDesigner != null) {
+                        Button(
+                            onClick = {
+                                onDismiss()
+                                onOpenPhotoCabinetDesigner()
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("catalog_open_photo_cabinet_designer_btn")
+                        ) {
+                            Text("تصميم خزانة من صور 360°", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
                     if (onExportJson != null) {
                         OutlinedButton(
                             onClick = onExportJson,
@@ -125,7 +165,7 @@ fun CatalogBottomSheet(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("ابحث عن خزانة، فيترينة، تاج، نيش، مقاس (مثلاً 90 سم)...", fontSize = 12.sp, color = Color(0xFF64748B)) },
+                placeholder = { Text("ابحث عن خزانة، كورنر علوي/سفلي، فيترينة، تاج، مقاس (مثلاً 90 سم)...", fontSize = 12.sp, color = Color(0xFF64748B)) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp)) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -152,15 +192,79 @@ fun CatalogBottomSheet(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Category Filter Pills
+            // Photorealistic Material Swatch Background Selector (رخام، خشب، جرانيت)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "خلفية معاينة الخامة الواقعية:",
+                    fontSize = 11.sp,
+                    color = Color(0xFFCBD5E1),
+                    fontWeight = FontWeight.SemiBold
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(CatalogTextureBackground.values()) { bg ->
+                        val isSelected = selectedTextureBg == bg
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF1E293B),
+                            border = BorderStroke(
+                                if (isSelected) 2.dp else 1.dp,
+                                if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .clickable { selectedTextureBg = bg }
+                                .testTag("catalog_bg_swatch_${bg.id}")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                if (bg.drawableRes != null) {
+                                    Image(
+                                        painter = painterResource(id = bg.drawableRes),
+                                        contentDescription = bg.titleAr,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = bg.titleAr,
+                                    fontSize = 11.sp,
+                                    color = if (isSelected) Color(0xFF38BDF8) else Color.White,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Category Filter Pills (Cabinets, Drawers, Appliances, Corners)
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 item {
                     FilterChip(
-                        selected = showAllCategories,
-                        onClick = { showAllCategories = true },
+                        selected = showAllCategories && !showCornersOnly && !showDrawersOnly,
+                        onClick = {
+                            showAllCategories = true
+                            showCornersOnly = false
+                            showDrawersOnly = false
+                        },
                         label = { Text("الكل (${allUnits.size})", fontSize = 12.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = Color(0xFF0284C7),
@@ -170,12 +274,54 @@ fun CatalogBottomSheet(
                         )
                     )
                 }
+                item {
+                    FilterChip(
+                        selected = showDrawersOnly,
+                        onClick = {
+                            showDrawersOnly = !showDrawersOnly
+                            if (showDrawersOnly) {
+                                showAllCategories = false
+                                showCornersOnly = false
+                            }
+                        },
+                        label = { Text("وحدات الأدراج ($drawerCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF10B981),
+                            selectedLabelColor = Color.White,
+                            containerColor = Color(0xFF1E293B),
+                            labelColor = Color(0xFF34D399)
+                        ),
+                        modifier = Modifier.testTag("catalog_filter_drawers")
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = showCornersOnly,
+                        onClick = {
+                            showCornersOnly = !showCornersOnly
+                            if (showCornersOnly) {
+                                showAllCategories = false
+                                showDrawersOnly = false
+                            }
+                        },
+                        label = { Text("خزائن الكورنرات علوية وسفلية ($cornerCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFD97706),
+                            selectedLabelColor = Color.White,
+                            containerColor = Color(0xFF1E293B),
+                            labelColor = Color(0xFFFBBF24)
+                        ),
+                        modifier = Modifier.testTag("catalog_filter_corners")
+                    )
+                }
                 items(ElementCategory.values()) { cat ->
                     val count = allUnits.count { it.category == cat }
                     FilterChip(
-                        selected = !showAllCategories && activeCategory == cat,
+                        selected = !showAllCategories && !showCornersOnly && !showDrawersOnly && activeCategory == cat,
                         onClick = {
                             showAllCategories = false
+                            showCornersOnly = false
+                            showDrawersOnly = false
                             activeCategory = cat
                         },
                         label = { Text("${cat.displayName} ($count)", fontSize = 12.sp) },
@@ -192,9 +338,14 @@ fun CatalogBottomSheet(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Filtered Items List
-            val filteredItems = remember(activeCategory, showAllCategories, searchQuery) {
+            val filteredItems = remember(activeCategory, showAllCategories, showCornersOnly, showDrawersOnly, searchQuery) {
                 allUnits.filter { unit ->
-                    val matchesCategory = showAllCategories || searchQuery.isNotBlank() || unit.category == activeCategory
+                    val matchesCategory = when {
+                        showDrawersOnly -> unit.code.contains("drawer")
+                        showCornersOnly -> unit.isCornerUnit
+                        showAllCategories || searchQuery.isNotBlank() -> true
+                        else -> unit.category == activeCategory
+                    }
                     val matchesSearch = searchQuery.isBlank() ||
                             unit.title.contains(searchQuery, ignoreCase = true) ||
                             unit.code.contains(searchQuery, ignoreCase = true) ||
@@ -229,24 +380,58 @@ fun CatalogBottomSheet(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Visual architectural preview thumbnail
-                            CabinetPreviewThumbnail(
-                                type = item,
+                            // Visual architectural preview thumbnail with photorealistic material background
+                            val unitPriceUsd = remember(item) { KitchenCostCalculator.calculateUnitPriceForType(item) }
+                            Box(
                                 modifier = Modifier
-                                    .size(56.dp)
+                                    .size(58.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0xFF0F172A))
-                            )
+                            ) {
+                                selectedTextureBg.drawableRes?.let { resId ->
+                                    Image(
+                                        painter = painterResource(id = resId),
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .alpha(0.42f)
+                                    )
+                                }
+                                CabinetPreviewThumbnail(
+                                    type = item,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
 
                             Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.title,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
-                                    color = Color.White
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = item.title,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp,
+                                        color = Color.White,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFF064E3B),
+                                        border = BorderStroke(1.dp, Color(0xFF10B981))
+                                    ) {
+                                        Text(
+                                            text = String.format(Locale.US, "$%.0f", unitPriceUsd),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFF34D399),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
                                     text = "الأبعاد: ${item.defaultDimensions.x.toInt()} × ${item.defaultDimensions.y.toInt()} × ${item.defaultDimensions.z.toInt()} مم",

@@ -180,6 +180,7 @@ object SmartSnapper {
         }
 
         // 3. Adjacent Cabinet Snapping (Side-by-side seamless magnetic connection)
+        val neighborPullRadius = min(snapThresholdMm, 42.0f)
         val sameLevelElements = existingElements.filter { other ->
             other.id != target.id &&
                 other.isVisible &&
@@ -187,18 +188,16 @@ object SmartSnapper {
         }
 
         for (other in sameLevelElements) {
-            val otherIsRot = other.rotationY == 90f || other.rotationY == 270f
-            val otherEffW = if (otherIsRot) other.dimensions.z else other.dimensions.x
-            val otherEffD = if (otherIsRot) other.dimensions.x else other.dimensions.z
+            val (otherEffW, otherEffD) = CollisionDetector.getEffectiveFootprint(other)
             val otherHalfW = otherEffW * 0.5f
             val otherHalfD = otherEffD * 0.5f
 
             // Snap along X-axis (side-to-side alignment along North/South walls)
-            val zOverlap = abs(snappedPos.z - other.position.z) < (halfD + otherHalfD) * 0.9f
+            val zOverlap = abs(snappedPos.z - other.position.z) < (halfD + otherHalfD) * 0.85f
             if (zOverlap) {
                 // Snap to Right of 'other'
                 val snapRightX = other.position.x + otherHalfW + halfW
-                if (abs(snappedPos.x - snapRightX) <= snapThresholdMm * 1.25f) {
+                if (abs(snappedPos.x - snapRightX) <= neighborPullRadius) {
                     snappedPos = snappedPos.copy(x = snapRightX, z = if (snappedToWall) snappedPos.z else other.position.z)
                     snappedToNeighbor = true
                     guideLines.add(
@@ -213,7 +212,7 @@ object SmartSnapper {
 
                 // Snap to Left of 'other'
                 val snapLeftX = other.position.x - otherHalfW - halfW
-                if (abs(snappedPos.x - snapLeftX) <= snapThresholdMm * 1.25f) {
+                if (abs(snappedPos.x - snapLeftX) <= neighborPullRadius) {
                     snappedPos = snappedPos.copy(x = snapLeftX, z = if (snappedToWall) snappedPos.z else other.position.z)
                     snappedToNeighbor = true
                     guideLines.add(
@@ -228,11 +227,11 @@ object SmartSnapper {
             }
 
             // Snap along Z-axis (side-to-side along West/East walls)
-            val xOverlap = abs(snappedPos.x - other.position.x) < (halfW + otherHalfW) * 0.9f
+            val xOverlap = abs(snappedPos.x - other.position.x) < (halfW + otherHalfW) * 0.85f
             if (xOverlap) {
                 // Snap to South (+Z) of 'other'
                 val snapFrontZ = other.position.z + otherHalfD + halfD
-                if (abs(snappedPos.z - snapFrontZ) <= snapThresholdMm * 1.25f) {
+                if (abs(snappedPos.z - snapFrontZ) <= neighborPullRadius) {
                     snappedPos = snappedPos.copy(z = snapFrontZ, x = if (snappedToWall) snappedPos.x else other.position.x)
                     snappedToNeighbor = true
                     guideLines.add(
@@ -247,7 +246,7 @@ object SmartSnapper {
 
                 // Snap to North (-Z) of 'other'
                 val snapBackZ = other.position.z - otherHalfD - halfD
-                if (abs(snappedPos.z - snapBackZ) <= snapThresholdMm * 1.25f) {
+                if (abs(snappedPos.z - snapBackZ) <= neighborPullRadius) {
                     snappedPos = snappedPos.copy(z = snapBackZ, x = if (snappedToWall) snappedPos.x else other.position.x)
                     snappedToNeighbor = true
                     guideLines.add(
@@ -268,14 +267,14 @@ object SmartSnapper {
             z = snappedPos.z.coerceIn(halfD, maxRoomZ)
         ).roundTo1mm()
 
-        // 4. Real-Time Collision, Anti-Overlap Resolution & Ergonomic Clearance Evaluation
+        // 4. Real-Time Collision & Anti-Overlap Resolution
         val snappedTarget = target.copy(position = finalPos, rotationY = snappedRot)
         val nonOverlapRes = CollisionDetector.resolveNonOverlappingMovement(
             original = target,
             candidate = snappedTarget,
             existingElements = existingElements,
             room = room,
-            toleranceMm = 1.0f
+            toleranceMm = 1.5f
         )
 
         val resolvedTarget = if (preventOverlap && nonOverlapRes.wasOverlapPrevented) {
@@ -302,39 +301,29 @@ object SmartSnapper {
             candidate = resolvedTarget,
             existingElements = existingElements,
             room = room,
-            toleranceMm = 2.0f
+            toleranceMm = 2.0f,
+            includeErgonomicClearance = false
         )
 
-        val sceneWithTarget = existingElements.filter { it.id != target.id } + resolvedTarget
+        val sceneWithTarget = existingElements.filter { it.id != resolvedTarget.id } + resolvedTarget
         val ergReport = ErgonomicValidationEngine.validate(room, sceneWithTarget)
-        val clearanceIssues = ergReport.issues.filter { issue ->
-            resolvedTarget.id in issue.affectedElementIds &&
-                (issue.code == ErgonomicRuleCode.INSUFFICIENT_DOOR_CLEARANCE ||
-                    issue.code == ErgonomicRuleCode.CORNER_DOOR_INTERFERENCE ||
-                    issue.code == ErgonomicRuleCode.SINK_TOO_CLOSE_TO_STOVE ||
-                    issue.code == ErgonomicRuleCode.ELEMENT_OVERLAP_COLLISION)
+        val criticalClearanceZones = ergReport.doorClearanceZones.filter { zone ->
+            zone.isCriticalSwingBlocked && zone.elementId == resolvedTarget.id
         }
-        val violatedZones = ergReport.doorClearanceZones.filter { zone ->
-            zone.isInsufficient && zone.elementId == resolvedTarget.id
-        }
+        val hasErgonomicViolation = criticalClearanceZones.isNotEmpty()
 
-        val hasErgonomicViolation = clearanceIssues.isNotEmpty() || violatedZones.isNotEmpty()
-        val conflictingIds = (
-            collisionCheck.collidingElementIds +
-                clearanceIssues.flatMap { it.affectedElementIds } +
-                violatedZones.map { it.elementId }
-            )
+        val conflictingIds = collisionCheck.collidingElementIds
             .filter { it != resolvedTarget.id }
             .distinct()
 
-        // Emit red collision warning guidelines between the target and any conflicting element
-        conflictingIds.forEach { conflictId ->
+        // Emit red collision warning guidelines on physical overlap
+        collisionCheck.collidingElementIds.filter { it != resolvedTarget.id }.forEach { conflictId ->
             existingElements.find { it.id == conflictId }?.let { conflictElem ->
                 guideLines.add(
                     SnapGuideLine(
                         start = resolvedTarget.position + Vector3(0f, resolvedTarget.dimensions.y * 0.5f, 0f),
                         end = conflictElem.position + Vector3(0f, conflictElem.dimensions.y * 0.5f, 0f),
-                        labelMm = if (collisionCheck.hasCollision) "⛔ تداخل مباشر" else "⚠ انتهاك خلوص",
+                        labelMm = "⛔ تداخل مباشر",
                         isWallGuide = false,
                         isCollisionWarning = true
                     )
@@ -345,10 +334,9 @@ object SmartSnapper {
         val collisionReason = when {
             collisionCheck.hasCollision && collisionCheck.message.isNotBlank() -> collisionCheck.message
             nonOverlapRes.wasOverlapPrevented && nonOverlapRes.messageAr != null -> nonOverlapRes.messageAr
-            clearanceIssues.isNotEmpty() -> clearanceIssues.first().titleAr + ": " + clearanceIssues.first().descriptionAr
-            violatedZones.isNotEmpty() -> {
-                val z = violatedZones.first()
-                "انتهاك خلوص فتح الباب/الممر (${(z.availableClearanceMm / 10f).toInt()} سم متاح من أصل ${(z.recommendedWalkwayMm / 10f).toInt()} سم قياسي)"
+            hasErgonomicViolation -> {
+                val z = criticalClearanceZones.first()
+                "⛔ انتهاك خلوص فتح الباب: المسافة المتاحة ${(z.availableClearanceMm / 10f).toInt()} سم فقط"
             }
             else -> null
         }
@@ -364,7 +352,7 @@ object SmartSnapper {
             isErgonomicClearanceViolation = hasErgonomicViolation,
             conflictingElementIds = conflictingIds,
             collisionReasonAr = collisionReason,
-            clearanceZones = violatedZones,
+            clearanceZones = ergReport.doorClearanceZones,
             nonOverlappingPosition = nonOverlapRes.resolvedElement.position,
             wasOverlapPrevented = nonOverlapRes.wasOverlapPrevented
         )

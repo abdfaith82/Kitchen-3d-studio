@@ -305,4 +305,65 @@ object CameraObjectScanner {
             defaultColorHex = colorHex
         )
     }
+
+    /**
+     * Serializes a [CameraScanAnalysis] into a comprehensive Professional CAD/BIM & PBR JSON string.
+     * Includes root-level KitchenElement fields so [com.example.core.export.JsonProjectExporter.parseElementsFromJsonString]
+     * parses it directly, while enriching the JSON with `camera_scan_telemetry`, `cad_engineering_specs`,
+     * and `pbr_material_signature` for professional architectural & CNC workflows.
+     */
+    fun serializeScanToProfessionalJson(
+        analysis: CameraScanAnalysis,
+        prettyPrint: Boolean = true
+    ): String {
+        val baseElemJsonStr = com.example.core.export.JsonProjectExporter.serializeSingleElementToJsonString(
+            elem = analysis.element,
+            includeBoundingBoxes = true,
+            prettyPrint = false
+        )
+
+        val root = org.json.JSONObject(baseElemJsonStr)
+        root.put("schema_version", "Kitchen3D_ProCameraCAD_v2.0")
+
+        val bboxArray = org.json.JSONArray().apply {
+            analysis.boundingBoxNormalized.forEach { put((it * 1000f).roundToInt() / 1000.0) }
+        }
+        val telemetryObj = org.json.JSONObject().apply {
+            put("optical_precision", "1mm_CAD_Locked")
+            put("detected_aspect_ratio_wh", (analysis.detectedAspectRatioWH * 1000f).roundToInt() / 1000.0)
+            put("normalized_roi_bounds", bboxArray)
+            put("scan_timestamp_ms", System.currentTimeMillis())
+        }
+        root.put("camera_scan_telemetry", telemetryObj)
+
+        val mountingZone = when (analysis.element.type.category) {
+            com.example.domain.model.ElementCategory.WALL_CABINET -> "UPPER_WALL_MOUNTED_1450MM"
+            com.example.domain.model.ElementCategory.TALL_UNIT -> "FULL_HEIGHT_TOWER_0MM"
+            else -> "FLOOR_BASE_LEVEL_0MM"
+        }
+        val cadSpecsObj = org.json.JSONObject().apply {
+            put("mounting_zone", mountingZone)
+            put("carcass_thickness_mm", 18.0)
+            put("back_panel_thickness_mm", if (analysis.element.hasBackPanel) 6.0 else 0.0)
+            put("handle_profile", "Gola_Anodized_Aluminum_J_Channel")
+            put("hinge_hardware", "Blum_ClipTop_Blumotion_110Deg_35mm")
+            put("cnc_system_grid_mm", 32.0)
+            put("edge_banding_mm", 1.0)
+        }
+        root.put("cad_engineering_specs", cadSpecsObj)
+
+        val hexStr = String.format(java.util.Locale.US, "#%06X", (0xFFFFFFL and analysis.sampledColorHex))
+        val pbrObj = org.json.JSONObject().apply {
+            put("sampled_color_hex", hexStr)
+            put("matched_finish_id", analysis.matchedMaterial.id)
+            put("matched_finish_name", analysis.matchedMaterial.name)
+            put("roughness", (analysis.customCameraMaterial.roughness * 100f).roundToInt() / 100.0)
+            put("metallic", (analysis.customCameraMaterial.metallic * 100f).roundToInt() / 100.0)
+            put("specular_ior", 1.48)
+        }
+        root.put("pbr_material_signature", pbrObj)
+
+        return if (prettyPrint) root.toString(2) else root.toString()
+    }
 }
+

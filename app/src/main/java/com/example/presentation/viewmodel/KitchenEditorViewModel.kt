@@ -17,6 +17,8 @@ import com.example.core.cam.CustomMaterialOverridePreset
 import com.example.core.cam.DoorStyle
 import com.example.core.cam.HandleStyle
 import com.example.core.cam.ParametricCabinet
+import com.example.core.cam.StandardMaterialDimensionsConfig
+import com.example.core.cam.StandardMelamineSheetSize
 import com.example.core.command.*
 import com.example.core.geometry.*
 import com.example.core.math.MathUtils
@@ -27,6 +29,16 @@ import com.example.domain.repository.BillOfMaterials
 import com.example.domain.repository.KitchenProject
 import com.example.domain.repository.KitchenProjectRepository
 import com.example.core.camera.*
+import com.example.core.ai.AiDesignUiState
+import com.example.core.ai.GeminiKitchenDesignService
+import com.example.core.ai.KitchenAiStylePreference
+import com.example.core.export.JsonProjectExporter
+import com.example.core.units.MeasurementUnitSystem
+import com.example.data.remote.FirestoreKitchenComponent
+import com.example.data.remote.FirestoreKitchenDesign
+import com.example.data.remote.FirestoreKitchenRepository
+import com.example.data.remote.KitchenCostCalculator
+import com.example.data.remote.ProjectCostDistribution
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -72,6 +84,9 @@ sealed class ActiveDialog {
     data object AluminumBarNesting : ActiveDialog()
     data object ProjectsManager : ActiveDialog()
     data object CabinetFillerTool : ActiveDialog()
+    data object GeminiAiDesigner : ActiveDialog()
+    data object SmartAccessories : ActiveDialog()
+    data object PhotoCabinetDesigner : ActiveDialog()
 }
 
 data class KitchenEditorUiState(
@@ -122,7 +137,29 @@ data class KitchenEditorUiState(
     val workshopLogoBitmap: android.graphics.Bitmap? = null,
     val standardAluminumBarLengthMm: Float = 6000f,
     val availableAluminumBarLengthsMm: List<Float> = listOf(6000f, 5800f, 6500f, 4500f),
-    val customAluminumCutInputs: List<CabinetryAluminumCutInput> = emptyList()
+    val customAluminumCutInputs: List<CabinetryAluminumCutInput> = emptyList(),
+    val unitSystem: MeasurementUnitSystem = MeasurementUnitSystem.METRIC,
+    val enabledAccessoryIds: Set<String> = InternalAccessoryType.DEFAULT_ENABLED_IDS,
+    val aiDesignState: AiDesignUiState = AiDesignUiState.Idle,
+    val isVrGyroModeEnabled: Boolean = false,
+    val isVrStereoscopicSplit: Boolean = false,
+    val isVrAutoWalkEnabled: Boolean = false,
+    val isVrCameraSensorEnabled: Boolean = false,
+    val vrCameraSensitivity: Float = 1.0f,
+    val vrCameraSubMode: VrCameraNavSubMode = VrCameraNavSubMode.FULL_OPTICAL_PAN_TILT_WALK,
+    val standardMaterialDimensionsConfig: StandardMaterialDimensionsConfig = StandardMaterialDimensionsConfig(),
+    val savedMelamineSheetSizes: List<StandardMelamineSheetSize> = StandardMelamineSheetSize.DEFAULT_SIZES,
+    val sunAzimuthDeg: Float = 42f,
+    val sunElevationDeg: Float = 55f,
+    val artificialLightIntensity: Float = 0.90f,
+    val costDistribution: ProjectCostDistribution = KitchenCostCalculator.calculateProjectCostDistribution(project, 0.0),
+    val cloudDesigns: List<FirestoreKitchenDesign> = emptyList(),
+    val cloudComponents: List<FirestoreKitchenComponent> = emptyList(),
+    val isCloudSyncing: Boolean = false,
+    val cloudSyncStatusMessage: String? = null,
+    val currentUserUid: String? = null,
+    val currentUserDisplayName: String? = null,
+    val currentUserEmail: String? = null
 ) {
     val singleSelectedElement: KitchenElement?
         get() = if (selectedElementIds.size == 1) {
@@ -141,6 +178,19 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 ) : AndroidViewModel(application) {
 
     private val commandHistory = CommandHistory(maxCapacity = 150)
+
+    private val geminiKitchenDesignService = GeminiKitchenDesignService()
+
+    private val firestoreRepository: FirestoreKitchenRepository? by lazy {
+        try {
+            FirestoreKitchenRepository(getApplication())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private var cloudDesignsJob: Job? = null
+    private var cloudComponentsJob: Job? = null
 
     private val autoSaveManager = ProjectAutoSaveManager(
         scope = viewModelScope,
@@ -169,12 +219,15 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         }
         viewModelScope.launch {
             repository.getProject().collect { proj ->
-                // Automatically sanitize any legacy overlapping elements loaded from persistence
-                val sanitizedElements = CollisionDetector.resolveAllSceneOverlaps(proj.elements, proj.room)
-                val cleanProj = if (sanitizedElements != proj.elements) {
-                    proj.copy(elements = sanitizedElements)
-                } else {
-                    proj
+                // Offload 3D OBB overlap sanitization to Dispatchers.Default so MainActivity's
+                // initial SurfaceSyncGroup frame is never blocked on the Main UI thread
+                val cleanProj = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    val sanitizedElements = CollisionDetector.resolveAllSceneOverlaps(proj.elements, proj.room)
+                    if (sanitizedElements != proj.elements) {
+                        proj.copy(elements = sanitizedElements)
+                    } else {
+                        proj
+                    }
                 }
                 _uiState.update { it.copy(project = cleanProj) }
             }
@@ -210,14 +263,27 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 .map { it.project }
                 .distinctUntilChanged()
                 .collect { proj ->
-                    val report = ErgonomicValidationEngine.validateProject(proj)
-                    _uiState.update { it.copy(validationReport = report) }
+                    val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        ErgonomicValidationEngine.validateProject(proj)
+                    }
+                    val updatedBom = repository.generateBillOfMaterials(proj, _uiState.value.enabledAccessoryIds)
+                    val costDist = KitchenCostCalculator.calculateProjectCostDistribution(
+                        project = proj,
+                        accessoriesCostUsd = updatedBom.accessoriesEstimatedCostUsd.toDouble()
+                    )
+                    _uiState.update {
+                        it.copy(
+                            validationReport = report,
+                            billOfMaterials = updatedBom,
+                            costDistribution = costDist
+                        )
+                    }
                     repository.updateProject(proj)
                     autoSaveManager.onProjectStateModified(proj, currentSavedCameraState())
                 }
         }
         // Auto-persist camera coordinates to SQLite Room database & update Auto-Save Manager
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _uiState
                 .map {
                     SavedCameraState(
@@ -422,6 +488,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             z = rawTargetPos.z.coerceIn(halfD, maxRoomZ)
         )
         val quantizedRawPos = SmartSnapper.quantizeToGridMm(clampedRawPos, snapStepMm.coerceAtLeast(1f))
+        if ((quantizedRawPos - elem.position).lengthSquared() < 0.25f) return
         val candidate = elem.copy(position = quantizedRawPos)
 
         val updatedElements = allElements.toMutableList()
@@ -1088,6 +1155,91 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         commandHistory.execute(cmd)
     }
 
+    /**
+     * Inserts a custom 360°-enclosed cabinet designed from Front & Side Photos in [PhotoCabinetDesignerDialog].
+     */
+    fun addPhotoDesignedCabinet(
+        customName: String,
+        baseType: KitchenElementType,
+        dimensionsMm: Vector3,
+        frontMaterial: MaterialFinish,
+        sideMaterial: MaterialFinish,
+        countertopMaterial: MaterialFinish?,
+        hasBackPanel: Boolean,
+        hasFullSidePanels: Boolean,
+        boardThicknessMm: Float,
+        divisionsCount: Int,
+        frontPhotoUri: String?,
+        sidePhotoUri: String?
+    ) {
+        val room = _uiState.value.project.room
+        val existingElements = _uiState.value.project.elements
+        val candX = MathUtils.roundToMillimeter(room.widthMm * 0.5f)
+        val candZ = MathUtils.roundToMillimeter(dimensionsMm.z * 0.5f)
+
+        val tempCandidate = KitchenElement(
+            id = "elem_photo_${UUID.randomUUID().toString().take(8)}",
+            name = customName.ifBlank { baseType.title },
+            type = baseType,
+            position = Vector3(candX, baseType.defaultElevationY, candZ),
+            rotationY = 0f,
+            dimensions = dimensionsMm,
+            material = frontMaterial,
+            countertopMaterial = countertopMaterial,
+            hasBackPanel = hasBackPanel,
+            hasFullSidePanels = hasFullSidePanels,
+            customBoardThicknessMm = boardThicknessMm,
+            sidePanelMaterial = sideMaterial,
+            frontPhotoUri = frontPhotoUri,
+            sidePhotoUri = sidePhotoUri,
+            customDivisionsCount = divisionsCount
+        )
+
+        val autoElevResult = ElevationAndSafetyEngine.calculateAutomaticWallCabinetElevation(
+            candidate = tempCandidate,
+            existingElements = existingElements
+        )
+        val elevCandidate = tempCandidate.copy(
+            position = autoElevResult.resolvedPosition,
+            linkedBaseElementId = autoElevResult.linkedBaseElementId
+        )
+        val newElem = CollisionDetector.findNearestFreePosition(
+            candidate = elevCandidate,
+            existingElements = existingElements,
+            room = room,
+            toleranceMm = 1.0f
+        )
+
+        val cmd = AddElementCommand(
+            element = newElem,
+            onAdd = { elem ->
+                val safeElem = CollisionDetector.findNearestFreePosition(
+                    candidate = elem,
+                    existingElements = _uiState.value.project.elements,
+                    room = _uiState.value.project.room
+                )
+                val updated = _uiState.value.project.elements + safeElem
+                _uiState.update {
+                    it.copy(
+                        project = it.project.copy(elements = updated),
+                        selectedElementIds = setOf(safeElem.id),
+                        collisionResult = null
+                    )
+                }
+            },
+            onRemove = { id ->
+                val updated = _uiState.value.project.elements.filter { it.id != id }
+                _uiState.update {
+                    it.copy(
+                        project = it.project.copy(elements = updated),
+                        selectedElementIds = it.selectedElementIds - id
+                    )
+                }
+            }
+        )
+        commandHistory.execute(cmd)
+    }
+
     fun deleteSelectedElements() {
         val selected = _uiState.value.selectedElements
         if (selected.isEmpty()) return
@@ -1643,7 +1795,10 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 
     fun openDialog(dialog: ActiveDialog?) {
         if (dialog == ActiveDialog.BillOfMaterialsDialog) {
-            val bom = repository.generateBillOfMaterials(_uiState.value.project)
+            val bom = repository.generateBillOfMaterials(
+                project = _uiState.value.project,
+                enabledAccessoryIds = _uiState.value.enabledAccessoryIds
+            )
             _uiState.update { it.copy(activeDialog = dialog, billOfMaterials = bom) }
         } else {
             _uiState.update { it.copy(activeDialog = dialog) }
@@ -2014,7 +2169,10 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     }
 
     fun getBillOfMaterials(): BillOfMaterials {
-        return repository.generateBillOfMaterials(_uiState.value.project)
+        return repository.generateBillOfMaterials(
+            project = _uiState.value.project,
+            enabledAccessoryIds = _uiState.value.enabledAccessoryIds
+        )
     }
 
     /**
@@ -2110,7 +2268,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         )
     ): com.example.core.export.JsonProjectExporter.JsonSerializationResult {
         val currentState = _uiState.value
-        val bom = repository.generateBillOfMaterials(currentState.project)
+        val bom = repository.generateBillOfMaterials(currentState.project, currentState.enabledAccessoryIds)
         return com.example.core.export.JsonProjectExporter.serializeToJsonWithMetadata(
             project = currentState.project,
             options = options,
@@ -2131,7 +2289,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         )
     ): com.example.core.export.JsonProjectExporter.JsonSerializationResult {
         val currentState = _uiState.value
-        val bom = repository.generateBillOfMaterials(currentState.project)
+        val bom = repository.generateBillOfMaterials(currentState.project, currentState.enabledAccessoryIds)
         return com.example.core.export.JsonProjectExporter.exportToFile(
             file = outputFile,
             project = currentState.project,
@@ -2337,6 +2495,17 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 project = _uiState.value.project,
                 cameraState = currentSavedCameraState(),
                 trigger = AutoSaveTrigger.MANUAL,
+                createCheckpoint = true
+            )
+        }
+    }
+
+    fun triggerLifecycleAutoSave() {
+        viewModelScope.launch {
+            autoSaveManager.saveNow(
+                project = _uiState.value.project,
+                cameraState = currentSavedCameraState(),
+                trigger = AutoSaveTrigger.LIFECYCLE,
                 createCheckpoint = true
             )
         }
@@ -2576,5 +2745,431 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             }
         )
         commandHistory.execute(cmd)
+    }
+
+    // ==========================================
+    // 11. METRIC / IMPERIAL UNIT SYSTEM SWITCHER
+    // ==========================================
+
+    fun toggleUnitSystem() {
+        _uiState.update {
+            val next = if (it.unitSystem == MeasurementUnitSystem.METRIC) {
+                MeasurementUnitSystem.IMPERIAL
+            } else {
+                MeasurementUnitSystem.METRIC
+            }
+            it.copy(unitSystem = next)
+        }
+    }
+
+    // ==========================================
+    // 12. SMART INTERNAL ACCESSORIES LIBRARY (AUTO-BOM LINK)
+    // ==========================================
+
+    fun toggleAccessoryEnabled(accessoryId: String) {
+        _uiState.update { current ->
+            val nextSet = if (accessoryId in current.enabledAccessoryIds) {
+                current.enabledAccessoryIds - accessoryId
+            } else {
+                current.enabledAccessoryIds + accessoryId
+            }
+            val updatedBom = repository.generateBillOfMaterials(current.project, nextSet)
+            current.copy(
+                enabledAccessoryIds = nextSet,
+                billOfMaterials = updatedBom
+            )
+        }
+    }
+
+    fun enableAllCompatibleAccessories() {
+        _uiState.update { current ->
+            val allIds = InternalAccessoryType.DEFAULT_ENABLED_IDS
+            val updatedBom = repository.generateBillOfMaterials(current.project, allIds)
+            current.copy(
+                enabledAccessoryIds = allIds,
+                billOfMaterials = updatedBom
+            )
+        }
+    }
+
+    // ==========================================
+    // 13. GEMINI AI KITCHEN DESIGNER (FIREBASE AI LOGIC)
+    // ==========================================
+
+    fun generateGeminiKitchenDesign(
+        roomWidthMm: Float,
+        roomDepthMm: Float,
+        roomHeightMm: Float,
+        layoutShape: RoomLayoutShape,
+        stylePreference: KitchenAiStylePreference,
+        includeIsland: Boolean,
+        customNotes: String
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(aiDesignState = AiDesignUiState.Loading) }
+            val result = geminiKitchenDesignService.generateKitchenDesign(
+                roomWidthMm = roomWidthMm,
+                roomDepthMm = roomDepthMm,
+                roomHeightMm = roomHeightMm,
+                layoutShape = layoutShape,
+                stylePreference = stylePreference,
+                includeIsland = includeIsland,
+                customNotes = customNotes
+            )
+            _uiState.update { it.copy(aiDesignState = result) }
+        }
+    }
+
+    // ==========================================
+    // 14. VR 360° GYROSCOPE WALKTHROUGH & 3D LIGHTING SIMULATION
+    // ==========================================
+
+    fun toggleVrGyroMode() {
+        val enabling = !_uiState.value.isVrGyroModeEnabled
+        if (enabling && _uiState.value.cameraMode != CameraMode.FIRST_PERSON_WALK) {
+            setCameraMode(CameraMode.FIRST_PERSON_WALK)
+        }
+        _uiState.update {
+            it.copy(
+                isVrGyroModeEnabled = enabling,
+                isVrAutoWalkEnabled = if (!enabling) false else it.isVrAutoWalkEnabled,
+                isVrStereoscopicSplit = if (!enabling) false else it.isVrStereoscopicSplit
+            )
+        }
+    }
+
+    fun toggleVrStereoscopicSplit() {
+        val nextSplit = !_uiState.value.isVrStereoscopicSplit
+        if (nextSplit && !_uiState.value.isVrGyroModeEnabled) {
+            toggleVrGyroMode()
+        }
+        _uiState.update { it.copy(isVrStereoscopicSplit = nextSplit) }
+    }
+
+    fun toggleVrAutoWalk() {
+        _uiState.update { it.copy(isVrAutoWalkEnabled = !it.isVrAutoWalkEnabled) }
+    }
+
+    fun toggleVrCameraSensorMode() {
+        val enabling = !_uiState.value.isVrCameraSensorEnabled
+        if (enabling && _uiState.value.cameraMode != CameraMode.FIRST_PERSON_WALK) {
+            setCameraMode(CameraMode.FIRST_PERSON_WALK)
+        }
+        _uiState.update {
+            it.copy(
+                isVrCameraSensorEnabled = enabling,
+                isVrGyroModeEnabled = if (enabling && it.vrCameraSubMode == VrCameraNavSubMode.OPTICAL_WALK_PLUS_GYRO_LOOK) true else it.isVrGyroModeEnabled
+            )
+        }
+    }
+
+    fun updateVrCameraSensitivity(sensitivity: Float) {
+        _uiState.update { it.copy(vrCameraSensitivity = sensitivity.coerceIn(0.4f, 2.5f)) }
+    }
+
+    fun updateVrCameraSubMode(subMode: VrCameraNavSubMode) {
+        _uiState.update {
+            it.copy(
+                vrCameraSubMode = subMode,
+                isVrGyroModeEnabled = if (subMode == VrCameraNavSubMode.OPTICAL_WALK_PLUS_GYRO_LOOK && it.isVrCameraSensorEnabled) true else it.isVrGyroModeEnabled
+            )
+        }
+    }
+
+    fun updateStandardMaterialDimensionsConfig(config: StandardMaterialDimensionsConfig) {
+        _uiState.update { state ->
+            val clampedBarLen = config.aluminumStandardBarLengthMm.coerceIn(500f, 12000f)
+            val updatedBarLengths = if (state.availableAluminumBarLengthsMm.none { kotlin.math.abs(it - clampedBarLen) < 1f }) {
+                (state.availableAluminumBarLengthsMm + clampedBarLen).sortedDescending()
+            } else {
+                state.availableAluminumBarLengthsMm
+            }
+            state.copy(
+                standardMaterialDimensionsConfig = config,
+                standardAluminumBarLengthMm = clampedBarLen,
+                availableAluminumBarLengthsMm = updatedBarLengths
+            )
+        }
+    }
+
+    fun saveCustomMelamineSheetSize(sheetSize: StandardMelamineSheetSize) {
+        _uiState.update { state ->
+            val exists = state.savedMelamineSheetSizes.any {
+                kotlin.math.abs(it.lengthMm - sheetSize.lengthMm) < 2f &&
+                    kotlin.math.abs(it.widthMm - sheetSize.widthMm) < 2f
+            }
+            if (exists) state
+            else state.copy(savedMelamineSheetSizes = state.savedMelamineSheetSizes + sheetSize)
+        }
+    }
+
+    fun updateLightingSimulation(
+        sunAzimuthDeg: Float = _uiState.value.sunAzimuthDeg,
+        sunElevationDeg: Float = _uiState.value.sunElevationDeg,
+        artificialLightIntensity: Float = _uiState.value.artificialLightIntensity
+    ) {
+        _uiState.update {
+            it.copy(
+                sunAzimuthDeg = sunAzimuthDeg.coerceIn(-180f, 180f),
+                sunElevationDeg = sunElevationDeg.coerceIn(5f, 88f),
+                artificialLightIntensity = artificialLightIntensity.coerceIn(0f, 1.5f)
+            )
+        }
+    }
+
+    // ==========================================
+    // 15. AR LIVE MATERIAL SWAPPER WITH INSTANT JSON SYNC
+    // ==========================================
+
+    fun changeElementMaterialAndCountertop(
+        elementId: String,
+        cabinetMaterial: MaterialFinish?,
+        countertopMaterial: MaterialFinish?
+    ) {
+        val updatedElements = _uiState.value.project.elements.map { elem ->
+            if (elem.id == elementId) {
+                elem.copy(
+                    material = cabinetMaterial ?: elem.material,
+                    countertopMaterial = countertopMaterial ?: elem.countertopMaterial
+                )
+            } else elem
+        }
+        _uiState.update {
+            it.copy(
+                project = it.project.copy(elements = updatedElements),
+                selectedElementIds = setOf(elementId)
+            )
+        }
+    }
+
+    // ==========================================
+    // 16. FIRESTORE CLOUD SYNC FOR AUTHENTICATED GOOGLE USER
+    // ==========================================
+
+    fun bindAuthenticatedUser(
+        uid: String?,
+        displayName: String?,
+        email: String?
+    ) {
+        cloudDesignsJob?.cancel()
+        cloudComponentsJob?.cancel()
+
+        _uiState.update {
+            it.copy(
+                currentUserUid = uid,
+                currentUserDisplayName = displayName,
+                currentUserEmail = email,
+                cloudDesigns = if (uid == null) emptyList() else it.cloudDesigns,
+                cloudComponents = if (uid == null) emptyList() else it.cloudComponents,
+                cloudSyncStatusMessage = null
+            )
+        }
+
+        if (uid.isNullOrBlank()) return
+        val repo = firestoreRepository ?: return
+
+        cloudDesignsJob = viewModelScope.launch {
+            try {
+                repo.observeUserDesigns(uid).collect { list ->
+                    _uiState.update { it.copy(cloudDesigns = list) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(cloudSyncStatusMessage = "تنبيه مزامنة السحابة: ${e.localizedMessage ?: "تعذر الاتصال"}") }
+            }
+        }
+
+        cloudComponentsJob = viewModelScope.launch {
+            try {
+                repo.observeUserComponents(uid).collect { list ->
+                    _uiState.update { it.copy(cloudComponents = list) }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun saveCurrentDesignToFirestore(customTitle: String? = null) {
+        val uid = _uiState.value.currentUserUid
+        if (uid.isNullOrBlank()) {
+            _uiState.update { it.copy(cloudSyncStatusMessage = "يرجى تسجيل الدخول بحساب Google أولاً للمزامنة السحابية") }
+            return
+        }
+        val repo = firestoreRepository ?: return
+        val currentProj = _uiState.value.project
+        val titleToSave = customTitle?.takeIf { it.isNotBlank() } ?: currentProj.name
+        val sanitizedDesignId = currentProj.id.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(96).ifEmpty {
+            "design_${System.currentTimeMillis()}"
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCloudSyncing = true, cloudSyncStatusMessage = "جاري حفظ التصميم ومكونات المطبخ في سحابة Firestore...") }
+            try {
+                val updatedProject = currentProj.copy(name = titleToSave)
+                val costDist = _uiState.value.costDistribution
+                val serializedJson = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    JsonProjectExporter.serializeToJsonWithMetadata(
+                        project = updatedProject,
+                        options = JsonProjectExporter.JsonExportOptions(
+                            exportMode = JsonProjectExporter.JsonExportMode.FULL_PROJECT_AND_CAM,
+                            includeCatalogDefinitions = false,
+                            includeParametricCutList = false,
+                            includeAluminumAndSheetNesting = false,
+                            prettyPrint = false
+                        )
+                    ).jsonContent.take(450000)
+                }
+
+                val primaryMatId = updatedProject.elements.firstOrNull()?.material?.id ?: "oak"
+                val countertopMatId = updatedProject.elements.firstNotNullOfOrNull { it.countertopMaterial?.id } ?: "carrara"
+
+                val firestoreDesign = FirestoreKitchenDesign(
+                    id = sanitizedDesignId,
+                    userId = uid,
+                    title = titleToSave.take(190),
+                    roomWidthCm = (updatedProject.room.widthMm / 10.0).coerceIn(100.0, 5000.0),
+                    roomDepthCm = (updatedProject.room.depthMm / 10.0).coerceIn(100.0, 5000.0),
+                    roomHeightCm = (updatedProject.room.heightMm / 10.0).coerceIn(150.0, 1000.0),
+                    elementCount = updatedProject.elements.size.coerceIn(0, 500),
+                    totalCostUsd = costDist.totalCostUsd,
+                    materialsCostUsd = costDist.materialsTotalUsd,
+                    laborCostUsd = costDist.laborCostUsd,
+                    accessoriesCostUsd = costDist.accessoriesCostUsd,
+                    primaryMaterialId = primaryMatId,
+                    countertopMaterialId = countertopMatId,
+                    projectJson = serializedJson
+                )
+
+                val existing = repo.getKitchenDesign(uid, sanitizedDesignId)
+                if (existing == null) {
+                    repo.createKitchenDesign(uid, sanitizedDesignId, firestoreDesign)
+                } else {
+                    repo.updateKitchenDesign(
+                        uid,
+                        sanitizedDesignId,
+                        mapOf(
+                            "title" to firestoreDesign.title,
+                            "roomWidthCm" to firestoreDesign.roomWidthCm,
+                            "roomDepthCm" to firestoreDesign.roomDepthCm,
+                            "roomHeightCm" to firestoreDesign.roomHeightCm,
+                            "elementCount" to firestoreDesign.elementCount,
+                            "totalCostUsd" to firestoreDesign.totalCostUsd,
+                            "materialsCostUsd" to firestoreDesign.materialsCostUsd,
+                            "laborCostUsd" to firestoreDesign.laborCostUsd,
+                            "accessoriesCostUsd" to firestoreDesign.accessoriesCostUsd,
+                            "primaryMaterialId" to firestoreDesign.primaryMaterialId,
+                            "countertopMaterialId" to firestoreDesign.countertopMaterialId,
+                            "projectJson" to firestoreDesign.projectJson
+                        )
+                    )
+                }
+
+                // Sync up to 12 kitchen components into /users/{userId}/kitchen_components
+                updatedProject.elements.take(12).forEach { elem ->
+                    val compId = "${sanitizedDesignId}_${elem.id}".replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(110)
+                    val unitCost = costDist.unitCostsByElementId[elem.id]
+                        ?: KitchenCostCalculator.calculateElementPriceUsd(elem)
+                    val compDoc = FirestoreKitchenComponent(
+                        id = compId,
+                        userId = uid,
+                        designId = sanitizedDesignId,
+                        nameAr = elem.name.take(180).ifEmpty { elem.type.title },
+                        category = elem.type.category.name,
+                        typeName = elem.type.name,
+                        widthCm = (elem.dimensions.x / 10.0).coerceIn(10.0, 1000.0),
+                        depthCm = (elem.dimensions.z / 10.0).coerceIn(10.0, 1000.0),
+                        heightCm = (elem.dimensions.y / 10.0).coerceIn(5.0, 600.0),
+                        elevationCm = (elem.position.y / 10.0).coerceIn(0.0, 500.0),
+                        posXCm = (elem.position.x / 10.0).coerceIn(-2000.0, 5000.0),
+                        posYCm = (elem.position.z / 10.0).coerceIn(-2000.0, 5000.0),
+                        rotationDeg = elem.rotationY.toDouble().coerceIn(-360.0, 360.0),
+                        materialId = elem.material.id,
+                        unitPriceUsd = unitCost
+                    )
+                    val existingComp = repo.getKitchenComponent(uid, compId)
+                    if (existingComp == null) {
+                        repo.createKitchenComponent(uid, compId, compDoc)
+                    } else {
+                        repo.updateKitchenComponent(
+                            uid,
+                            compId,
+                            mapOf(
+                                "designId" to compDoc.designId,
+                                "nameAr" to compDoc.nameAr,
+                                "category" to compDoc.category,
+                                "typeName" to compDoc.typeName,
+                                "widthCm" to compDoc.widthCm,
+                                "depthCm" to compDoc.depthCm,
+                                "heightCm" to compDoc.heightCm,
+                                "elevationCm" to compDoc.elevationCm,
+                                "posXCm" to compDoc.posXCm,
+                                "posYCm" to compDoc.posYCm,
+                                "rotationDeg" to compDoc.rotationDeg,
+                                "materialId" to compDoc.materialId,
+                                "unitPriceUsd" to compDoc.unitPriceUsd
+                            )
+                        )
+                    }
+                }
+
+                _uiState.update {
+                    it.copy(
+                        project = updatedProject,
+                        isCloudSyncing = false,
+                        cloudSyncStatusMessage = "تم حفظ المطبخ '${updatedProject.name}' ومكوناته (${updatedProject.elements.size}) في Firestore بنجاح ✓"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isCloudSyncing = false,
+                        cloudSyncStatusMessage = "فشل الحفظ السحابي: ${e.localizedMessage ?: "خطأ في الشبكة"}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadDesignFromFirestore(cloudDesign: FirestoreKitchenDesign) {
+        viewModelScope.launch {
+            try {
+                val restored = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    JsonProjectExporter.importProjectOrElementsFromJson(
+                        jsonString = cloudDesign.projectJson,
+                        fallbackProject = _uiState.value.project.copy(
+                            id = cloudDesign.id,
+                            name = cloudDesign.title
+                        )
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        project = restored,
+                        selectedElementIds = emptySet(),
+                        cloudSyncStatusMessage = "تم استرجاع التصميم '${cloudDesign.title}' من حسابك السحابي بنجاح ✓"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(cloudSyncStatusMessage = "تعذر قراءة بيانات التصميم السحابي: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    fun deleteCloudDesignFromFirestore(designId: String) {
+        val uid = _uiState.value.currentUserUid ?: return
+        val repo = firestoreRepository ?: return
+        viewModelScope.launch {
+            try {
+                repo.deleteKitchenDesign(uid, designId)
+                _uiState.update {
+                    it.copy(cloudSyncStatusMessage = "تم حذف التصميم من السحابة بنجاح")
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(cloudSyncStatusMessage = "تعذر حذف التصميم السحابي: ${e.localizedMessage}")
+                }
+            }
+        }
     }
 }

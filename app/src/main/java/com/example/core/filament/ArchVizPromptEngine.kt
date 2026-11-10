@@ -161,7 +161,7 @@ object ArchVizPromptEngine {
             denoisingStrength = denoisingStrength
         )
 
-        val rootJson = toJsonObject(
+        val formattedJson = formatJsonPayloadString(
             positivePrompt = fullPositivePrompt,
             negativePrompt = DEFAULT_NEGATIVE_PROMPT,
             controlNetSettings = controlNet
@@ -171,8 +171,35 @@ object ArchVizPromptEngine {
             positivePrompt = fullPositivePrompt,
             negativePrompt = DEFAULT_NEGATIVE_PROMPT,
             controlNetSettings = controlNet,
-            jsonString = rootJson.toString(2)
+            jsonString = formattedJson
         )
+    }
+
+    fun formatJsonPayloadString(
+        positivePrompt: String,
+        negativePrompt: String = DEFAULT_NEGATIVE_PROMPT,
+        controlNetSettings: ControlNetSettings = ControlNetSettings()
+    ): String {
+        fun esc(s: String): String = s
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        val condStr = String.format(Locale.US, "%.2f", controlNetSettings.conditioningScale)
+        val guidStr = String.format(Locale.US, "%.1f", controlNetSettings.guidanceScale)
+        val denoiseStr = String.format(Locale.US, "%.2f", controlNetSettings.denoisingStrength)
+        return """
+{
+  "positive_prompt": "${esc(positivePrompt)}",
+  "negative_prompt": "${esc(negativePrompt)}",
+  "controlnet_settings": {
+    "preprocessor": "${esc(controlNetSettings.preprocessor)}",
+    "conditioning_scale": $condStr,
+    "guidance_scale": $guidStr,
+    "denoising_strength": $denoiseStr
+  }
+}
+        """.trimIndent()
     }
 
     fun toJsonObject(

@@ -52,9 +52,11 @@ enum class AutoSaveTrigger(val code: String, val labelAr: String) {
 data class AutoSaveUiState(
     val isEnabled: Boolean = true,
     val intervalSeconds: Int = ProjectAutoSaveManager.DEFAULT_INTERVAL_SECONDS,
+    val secondsUntilNextSave: Int = ProjectAutoSaveManager.DEFAULT_INTERVAL_SECONDS,
     val status: AutoSaveStatus = AutoSaveStatus.SAVED,
     val lastSavedTimestampMs: Long? = null,
     val lastSavedFormattedTime: String = "الآن",
+    val lastTriggerLabelAr: String = AutoSaveTrigger.INTERVAL.labelAr,
     val lastChecksumCrc32: Long = 0L,
     val lastPayloadBytes: Int = 0,
     val totalAutoSaveCount: Int = 0,
@@ -182,7 +184,8 @@ class ProjectAutoSaveManager(
 
     private val _state = MutableStateFlow(
         AutoSaveUiState(
-            intervalSeconds = initialIntervalSeconds.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
+            intervalSeconds = initialIntervalSeconds.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS),
+            secondsUntilNextSave = initialIntervalSeconds.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
         )
     )
     val state: StateFlow<AutoSaveUiState> = _state.asStateFlow()
@@ -221,28 +224,47 @@ class ProjectAutoSaveManager(
 
     /**
      * Starts or restarts the periodic interval coroutine that serializes the active project
-     * state into Room every [AutoSaveUiState.intervalSeconds] seconds.
+     * room layout state into Room every [AutoSaveUiState.intervalSeconds] seconds with a live 1s countdown.
      */
     private fun startPeriodicLoop() {
         periodicJob?.cancel()
         if (!_state.value.isEnabled) return
 
         periodicJob = scope.launch(ioDispatcher) {
+            var remaining = _state.value.intervalSeconds.coerceAtLeast(MIN_INTERVAL_SECONDS)
             while (isActive && _state.value.isEnabled) {
-                val intervalMs = _state.value.intervalSeconds.coerceAtLeast(MIN_INTERVAL_SECONDS) * 1000L
-                delay(intervalMs)
+                delay(1000L)
+                if (!_state.value.isEnabled) continue
 
-                val projectSnapshot = latestProject ?: continue
-                val cameraSnapshot = latestCameraState
-                val currentChecksum = computeStateChecksum(projectSnapshot, cameraSnapshot)
+                remaining -= 1
+                if (remaining > 0) {
+                    _state.update { it.copy(secondsUntilNextSave = remaining) }
+                } else {
+                    val cfgInterval = _state.value.intervalSeconds.coerceAtLeast(MIN_INTERVAL_SECONDS)
+                    remaining = cfgInterval
+                    _state.update { it.copy(secondsUntilNextSave = cfgInterval) }
 
-                if (currentChecksum != lastPersistedStateChecksum || _state.value.totalAutoSaveCount == 0) {
-                    performSerializationAndPersist(
-                        project = projectSnapshot,
-                        cameraState = cameraSnapshot,
-                        trigger = AutoSaveTrigger.INTERVAL,
-                        createCheckpoint = true
-                    )
+                    val projectSnapshot = latestProject ?: continue
+                    val cameraSnapshot = latestCameraState
+                    val currentChecksum = computeStateChecksum(projectSnapshot, cameraSnapshot)
+
+                    // Periodically persist the current room layout state into local Room DB
+                    if (currentChecksum != lastPersistedStateChecksum || _state.value.totalAutoSaveCount == 0 || _state.value.hasUnsavedChanges) {
+                        performSerializationAndPersist(
+                            project = projectSnapshot,
+                            cameraState = cameraSnapshot,
+                            trigger = AutoSaveTrigger.INTERVAL,
+                            createCheckpoint = true
+                        )
+                    } else {
+                        // Refresh timestamp & primary Room entry so periodic heartbeat is verified
+                        performSerializationAndPersist(
+                            project = projectSnapshot,
+                            cameraState = cameraSnapshot,
+                            trigger = AutoSaveTrigger.INTERVAL,
+                            createCheckpoint = false
+                        )
+                    }
                 }
             }
         }
@@ -259,22 +281,22 @@ class ProjectAutoSaveManager(
         latestProject = project
         latestCameraState = cameraState
 
-        val newChecksum = computeStateChecksum(project, cameraState)
-        if (newChecksum == lastPersistedStateChecksum && _state.value.totalAutoSaveCount > 0) {
-            return
-        }
-
-        _state.update {
-            it.copy(
-                status = if (it.isEnabled) AutoSaveStatus.PENDING_CHANGES else AutoSaveStatus.PAUSED,
-                hasUnsavedChanges = true
-            )
-        }
-
-        if (!_state.value.isEnabled) return
-
         debounceJob?.cancel()
         debounceJob = scope.launch(ioDispatcher) {
+            val newChecksum = computeStateChecksum(project, cameraState)
+            if (newChecksum == lastPersistedStateChecksum && _state.value.totalAutoSaveCount > 0) {
+                return@launch
+            }
+
+            _state.update {
+                it.copy(
+                    status = if (it.isEnabled) AutoSaveStatus.PENDING_CHANGES else AutoSaveStatus.PAUSED,
+                    hasUnsavedChanges = true
+                )
+            }
+
+            if (!_state.value.isEnabled) return@launch
+
             delay(DEBOUNCE_DELAY_MS)
             val currentProj = latestProject ?: return@launch
             performSerializationAndPersist(
@@ -322,7 +344,7 @@ class ProjectAutoSaveManager(
      */
     fun setAutoSaveIntervalSeconds(seconds: Int) {
         val clamped = seconds.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
-        _state.update { it.copy(intervalSeconds = clamped) }
+        _state.update { it.copy(intervalSeconds = clamped, secondsUntilNextSave = clamped) }
         startPeriodicLoop()
     }
 
@@ -414,6 +436,7 @@ class ProjectAutoSaveManager(
                     status = AutoSaveStatus.SAVED,
                     lastSavedTimestampMs = now,
                     lastSavedFormattedTime = formattedTime,
+                    lastTriggerLabelAr = trigger.labelAr,
                     lastChecksumCrc32 = snapshot.stateChecksumCrc32,
                     lastPayloadBytes = snapshot.payloadSizeBytes,
                     totalAutoSaveCount = prev.totalAutoSaveCount + 1,

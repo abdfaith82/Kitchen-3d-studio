@@ -314,20 +314,27 @@ fun ExportStudioDialog(
                                         val bom = viewModel.getBillOfMaterials()
                                         val cabinets = viewModel.getParametricCabinetsFromScene()
 
+                                        // Generate 3D Architectural Rendered Preview Bitmap to embed in the PDF report
+                                        val rendered3DBitmap = try {
+                                            PdfBlueprintExporter.render3DPreviewBitmap(project = state.project)
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+
                                         PdfBlueprintExporter.exportToPdfFile(
                                             file = pdfFile,
                                             project = state.project,
                                             bom = bom,
                                             cabinets = cabinets,
-                                            config = currentPdfConfig
+                                            config = currentPdfConfig.copy(previewBitmap = rendered3DBitmap)
                                         )
 
-                                        exportStatusMessage = "تم توليد المخطط التنفيذي PDF بالسنتمتر مع شعار الورشة (${pdfFile.length() / 1024} كيلوبايت)"
+                                        exportStatusMessage = "تم توليد تقرير PDF الاحترافي الشامل (صور الرندر 3D + قائمة المواد BOM والإكسسوارات + المخطط الهندسي) (${pdfFile.length() / 1024} كيلوبايت)"
                                         ShareExportHelper.shareFile(
                                             context = context,
                                             file = pdfFile,
                                             mimeType = ShareExportHelper.MIME_PDF,
-                                            dialogTitle = "مشاركة المخطط التنفيذي PDF"
+                                            dialogTitle = "إرسال ومشاركة تقرير المشروع PDF عبر تطبيقات المراسلة"
                                         )
                                     } catch (e: Exception) {
                                         exportStatusMessage = "خطأ في إنشاء PDF: ${e.localizedMessage}"
@@ -357,6 +364,81 @@ fun ExportStudioDialog(
                                         )
                                     } catch (e: Exception) {
                                         exportStatusMessage = "خطأ في تصدير صورة المخطط: ${e.localizedMessage}"
+                                    } finally {
+                                        isProcessing = false
+                                    }
+                                },
+                                onShareViaSocial = {
+                                    isProcessing = true
+                                    try {
+                                        val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                        val cleanName = state.project.name.replace("\\s+".toRegex(), "_")
+                                        val pdfFile = File(exportDir, "${cleanName}_SOCIAL_$timeStamp.pdf")
+                                        val bom = viewModel.getBillOfMaterials()
+                                        val cabinets = viewModel.getParametricCabinetsFromScene()
+                                        val rendered3DBitmap = try {
+                                            PdfBlueprintExporter.render3DPreviewBitmap(project = state.project)
+                                        } catch (_: Exception) { null }
+                                        PdfBlueprintExporter.exportToPdfFile(
+                                            file = pdfFile,
+                                            project = state.project,
+                                            bom = bom,
+                                            cabinets = cabinets,
+                                            config = currentPdfConfig.copy(previewBitmap = rendered3DBitmap)
+                                        )
+                                        val r = state.project.room
+                                        val dimsText = "${(r.widthMm / 10f).toInt()}×${(r.depthMm / 10f).toInt()} سم (ارتفاع ${(r.heightMm / 10f).toInt()} سم)"
+                                        exportStatusMessage = "تم تجهيز المخطط للمشاركة عبر تطبيقات التواصل الاجتماعي (${pdfFile.length() / 1024} KB)"
+                                        ShareExportHelper.shareBlueprintViaSocialOrMessaging(
+                                            context = context,
+                                            file = pdfFile,
+                                            mimeType = ShareExportHelper.MIME_PDF,
+                                            projectName = state.project.name,
+                                            workshopName = workshopNameText.ifBlank { state.workshopName },
+                                            elementsCount = state.project.elements.size,
+                                            roomDimensionsText = dimsText
+                                        )
+                                    } catch (e: Exception) {
+                                        exportStatusMessage = "خطأ أثناء المشاركة: ${e.localizedMessage}"
+                                    } finally {
+                                        isProcessing = false
+                                    }
+                                },
+                                onShareViaEmail = { recipientEmail ->
+                                    isProcessing = true
+                                    try {
+                                        val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                        val cleanName = state.project.name.replace("\\s+".toRegex(), "_")
+                                        val pdfFile = File(exportDir, "${cleanName}_EMAIL_$timeStamp.pdf")
+                                        val bom = viewModel.getBillOfMaterials()
+                                        val cabinets = viewModel.getParametricCabinetsFromScene()
+                                        val rendered3DBitmap = try {
+                                            PdfBlueprintExporter.render3DPreviewBitmap(project = state.project)
+                                        } catch (_: Exception) { null }
+                                        PdfBlueprintExporter.exportToPdfFile(
+                                            file = pdfFile,
+                                            project = state.project,
+                                            bom = bom,
+                                            cabinets = cabinets,
+                                            config = currentPdfConfig.copy(previewBitmap = rendered3DBitmap)
+                                        )
+                                        val r = state.project.room
+                                        val dimsText = "${(r.widthMm / 10f).toInt()}×${(r.depthMm / 10f).toInt()} سم (ارتفاع ${(r.heightMm / 10f).toInt()} سم)"
+                                        exportStatusMessage = "تم تجهيز المخطط للإرسال عبر البريد الإلكتروني للورشة (${pdfFile.length() / 1024} KB)"
+                                        ShareExportHelper.shareBlueprintViaEmail(
+                                            context = context,
+                                            file = pdfFile,
+                                            mimeType = ShareExportHelper.MIME_PDF,
+                                            recipientEmail = recipientEmail,
+                                            projectName = state.project.name,
+                                            workshopName = workshopNameText.ifBlank { state.workshopName },
+                                            elementsCount = state.project.elements.size,
+                                            roomDimensionsText = dimsText
+                                        )
+                                    } catch (e: Exception) {
+                                        exportStatusMessage = "خطأ أثناء إعداد البريد: ${e.localizedMessage}"
                                     } finally {
                                         isProcessing = false
                                     }
@@ -564,8 +646,11 @@ private fun PdfBlueprintExportSection(
     onToggleCutList: (Boolean) -> Unit,
     isProcessing: Boolean,
     onGeneratePdf: () -> Unit,
-    onGeneratePrintReadyImage: () -> Unit
+    onGeneratePrintReadyImage: () -> Unit,
+    onShareViaSocial: () -> Unit = {},
+    onShareViaEmail: (String) -> Unit = {}
 ) {
+    var workshopEmail by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
     Column(
         modifier = Modifier
@@ -573,6 +658,60 @@ private fun PdfBlueprintExportSection(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // 0. Direct Share with Workshops & Friends via Social Media & Email Card
+        Surface(
+            color = Color(0xFF0F172A),
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "مشاركة المخططات مباشرة مع الورش أو الأصدقاء (تواصل اجتماعي / بريد إلكتروني):",
+                    color = Color(0xFFFBBF24),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                OutlinedTextField(
+                    value = workshopEmail,
+                    onValueChange = { workshopEmail = it },
+                    label = { Text("البريد الإلكتروني للورشة أو الصديق (اختياري للإرسال المباشر)", fontSize = 10.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("workshop_email_input")
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onShareViaSocial,
+                        enabled = !isProcessing,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(44.dp).testTag("btn_share_social_direct")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("مشاركة عبر التواصل / واتساب", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onShareViaEmail(workshopEmail) },
+                        enabled = !isProcessing,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(44.dp).testTag("btn_share_email_direct")
+                    ) {
+                        Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("إرسال بالبريد الإلكتروني للورشة", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         // 1. Custom Workshop Logo & Name Card (إضافة شعار ورشتك يدوياً)
         Surface(
             color = Color(0xFF0F172A),

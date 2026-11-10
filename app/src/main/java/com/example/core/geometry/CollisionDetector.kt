@@ -41,6 +41,11 @@ object CollisionDetector {
         KitchenElementType.COOKTOP_GAS_90
     )
 
+    private val CEILING_FIXTURE_TYPES = setOf(
+        KitchenElementType.CEILING_CHANDELIER_MODERN,
+        KitchenElementType.CEILING_LINEAR_LED_PANEL
+    )
+
     /**
      * Returns true when one element is a countertop cooktop insert resting on top of a base/island cabinet.
      */
@@ -51,7 +56,17 @@ object CollisionDetector {
         val insert = if (aInsert) a else b
         val base = if (aInsert) b else a
         val baseTopY = base.position.y + base.dimensions.y
-        return abs(insert.position.y - baseTopY) <= 65f
+        return abs(insert.position.y - baseTopY) <= 85f
+    }
+
+    /**
+     * Returns true when one element is a ceiling light/chandelier and the other is a cabinet/appliance.
+     * Ceiling fixtures hang in the center of the room ceiling and should only collide with other ceiling fixtures.
+     */
+    fun isNonCollidingCeilingPair(a: KitchenElement, b: KitchenElement): Boolean {
+        val aCeiling = a.type in CEILING_FIXTURE_TYPES
+        val bCeiling = b.type in CEILING_FIXTURE_TYPES
+        return aCeiling xor bCeiling
     }
 
     /**
@@ -91,7 +106,7 @@ object CollisionDetector {
     fun getPhysicalCollidingIds(
         candidate: KitchenElement,
         existingElements: List<KitchenElement>,
-        toleranceMm: Float = 1.0f
+        toleranceMm: Float = 1.5f
     ): List<String> {
         val candidateOBB = candidate.getOBB()
         val aabb = candidateOBB.toAABB()
@@ -100,6 +115,7 @@ object CollisionDetector {
         for (other in existingElements) {
             if (other.id == candidate.id || !other.isVisible) continue
             if (isCountertopInsertPair(candidate, other)) continue
+            if (isNonCollidingCeilingPair(candidate, other)) continue
 
             val otherAABB = other.getAABB()
             if (!aabb.intersects(otherAABB)) continue
@@ -516,39 +532,20 @@ object CollisionDetector {
             )
         }
 
-        // 4. Optional Standard Ergonomic Clearance Check (Door Swing < 85cm, Corner Door Clash, Sink-Stove < 40cm)
+        // 4. Optional Ergonomic Door-Swing Clearance Check (only critical door-swing blockages < 650mm at matching elevation)
         if (includeErgonomicClearance) {
             val sceneWithCandidate = existingElements.filter { it.id != candidate.id } + candidate
             val ergReport = ErgonomicValidationEngine.validate(room, sceneWithCandidate)
-            val clearanceIssues = ergReport.issues.filter { issue ->
-                candidate.id in issue.affectedElementIds &&
-                    (issue.code == ErgonomicRuleCode.INSUFFICIENT_DOOR_CLEARANCE ||
-                        issue.code == ErgonomicRuleCode.CORNER_DOOR_INTERFERENCE ||
-                        issue.code == ErgonomicRuleCode.SINK_TOO_CLOSE_TO_STOVE ||
-                        issue.code == ErgonomicRuleCode.ELEMENT_OVERLAP_COLLISION)
-            }
-            val violatedZones = ergReport.doorClearanceZones.filter { zone ->
-                zone.isInsufficient && zone.elementId == candidate.id
+            val criticalZones = ergReport.doorClearanceZones.filter { zone ->
+                zone.isCriticalSwingBlocked && zone.elementId == candidate.id
             }
 
-            if (clearanceIssues.isNotEmpty() || violatedZones.isNotEmpty()) {
-                val ergConflictIds = (
-                    clearanceIssues.flatMap { it.affectedElementIds } +
-                        violatedZones.map { it.elementId }
-                    )
-                    .filter { it != candidate.id }
-                    .distinct()
-
-                val msg = when {
-                    clearanceIssues.isNotEmpty() -> "⚠️ انتهاك خلوص إرجونومي: ${clearanceIssues.first().titleAr} (${clearanceIssues.first().descriptionAr})"
-                    else -> {
-                        val z = violatedZones.first()
-                        "⚠️ انتهاك خلوص فتح الباب/الممر: المسافة المتاحة ${(z.availableClearanceMm / 10f).toInt()} سم أقل من الحد القياسي ${(z.recommendedWalkwayMm / 10f).toInt()} سم"
-                    }
-                }
+            if (criticalZones.isNotEmpty()) {
+                val z = criticalZones.first()
+                val msg = "⛔ انتهاك خلوص فتح الباب: المسافة المتاحة أمام الخزانة ${(z.availableClearanceMm / 10f).toInt()} سم فقط (الحد الأدنى لفتح الضلفة 65 سم)"
                 return CollisionResult(
                     hasCollision = true,
-                    collidingElementIds = ergConflictIds,
+                    collidingElementIds = emptyList(),
                     isErgonomicClearanceViolation = true,
                     message = msg
                 )
@@ -557,7 +554,7 @@ object CollisionDetector {
 
         if (safetyZone.coveredUtilityPoints.isNotEmpty()) {
             return CollisionResult(
-                hasCollision = true,
+                hasCollision = false,
                 coveredUtilityCount = safetyZone.coveredUtilityPoints.size,
                 message = safetyZone.safetyNoticeAr ?: "⚠️ تنبيه: الخزانة تغطي مقبس كهرباء (فيش) أو نقطة خدمات في منطقة الـ 60 سم"
             )

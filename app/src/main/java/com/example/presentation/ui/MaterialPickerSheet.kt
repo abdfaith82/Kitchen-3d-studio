@@ -31,10 +31,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.domain.model.FinishCategory
 import com.example.domain.model.MaterialFinish
 
@@ -324,7 +326,78 @@ fun MaterialPickerSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Photorealistic Generated Material Swatches (رخام، خشب، جرانيت)
+            Text(
+                text = "نماذج الخامات الواقعية المولدة (Photorealistic Swatches):",
+                color = Color(0xFF38BDF8),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val photoSwatches = listOf(
+                    Triple(
+                        "رخام كرارا إيطالي",
+                        R.drawable.img_texture_carrara_marble_1794207893112,
+                        MaterialFinish.CARRARA_MARBLE
+                    ),
+                    Triple(
+                        "خشب بلوط طبيعي",
+                        R.drawable.img_texture_natural_oak_wood_1794207893591,
+                        MaterialFinish.NATURAL_OAK
+                    ),
+                    Triple(
+                        "جرانيت جالاكسي",
+                        R.drawable.img_texture_black_galaxy_granite_1794207894395,
+                        MaterialFinish.BLACK_GRANITE
+                    )
+                )
+                photoSwatches.forEach { (titleAr, resId, finishObj) ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF1E293B),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(68.dp)
+                            .clickable {
+                                applyFinishToTarget(finishObj)
+                                onDismiss()
+                            }
+                            .testTag("photo_swatch_${finishObj.id}")
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Image(
+                                painter = painterResource(id = resId),
+                                contentDescription = titleAr,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.38f)),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                Text(
+                                    text = titleAr,
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Finishes List
             LazyColumn(

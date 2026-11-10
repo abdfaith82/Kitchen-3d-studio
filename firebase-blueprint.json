@@ -1,0 +1,195 @@
+{
+  "entities": {
+    "KitchenDesign": {
+      "title": "KitchenDesign",
+      "description": "A complete 2D/3D architectural kitchen design project with room dimensions, materials, total cost, and serialized JSON layout",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Google user UID who owns this kitchen design"
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable name of the kitchen project"
+        },
+        "roomWidthCm": {
+          "type": "number",
+          "description": "Room width in centimeters"
+        },
+        "roomDepthCm": {
+          "type": "number",
+          "description": "Room depth in centimeters"
+        },
+        "roomHeightCm": {
+          "type": "number",
+          "description": "Room ceiling height in centimeters"
+        },
+        "elementCount": {
+          "type": "number",
+          "description": "Number of kitchen units/appliances in the design"
+        },
+        "totalCostUsd": {
+          "type": "number",
+          "description": "Automatically calculated total project cost in USD"
+        },
+        "materialsCostUsd": {
+          "type": "number",
+          "description": "Total cost of cabinets, boards, countertops, and aluminum profiles in USD"
+        },
+        "laborCostUsd": {
+          "type": "number",
+          "description": "Estimated workshop assembly and installation labor cost in USD"
+        },
+        "accessoriesCostUsd": {
+          "type": "number",
+          "description": "Total cost of smart internal kitchen accessories and hardware in USD"
+        },
+        "primaryMaterialId": {
+          "type": "string",
+          "description": "Identifier of the primary kitchen finish/material"
+        },
+        "countertopMaterialId": {
+          "type": "string",
+          "description": "Identifier of the countertop stone/marble/granite material"
+        },
+        "projectJson": {
+          "type": "string",
+          "description": "Full serialized KitchenProject JSON snapshot for 2D/3D restoration"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the design was first created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the design was last updated"
+        }
+      },
+      "required": [
+        "userId",
+        "title",
+        "roomWidthCm",
+        "roomDepthCm",
+        "roomHeightCm",
+        "elementCount",
+        "totalCostUsd",
+        "materialsCostUsd",
+        "laborCostUsd",
+        "accessoriesCostUsd",
+        "primaryMaterialId",
+        "countertopMaterialId",
+        "projectJson",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "KitchenComponent": {
+      "title": "KitchenComponent",
+      "description": "An individual kitchen unit (cabinet, drawer, corner unit, appliance, or custom photo-designed cabinet) stored in Firestore with size, category, coordinates, and unit price",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Google user UID who owns this kitchen component"
+        },
+        "designId": {
+          "type": "string",
+          "description": "ID of the parent kitchen design or 'catalog_custom' for reusable user units"
+        },
+        "nameAr": {
+          "type": "string",
+          "description": "Arabic name of the kitchen unit"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of the unit (CABINETS, DRAWERS, APPLIANCES, CORNERS, ISLANDS)"
+        },
+        "typeName": {
+          "type": "string",
+          "description": "Enum name of KitchenElementType"
+        },
+        "widthCm": {
+          "type": "number",
+          "description": "Unit width in centimeters"
+        },
+        "depthCm": {
+          "type": "number",
+          "description": "Unit depth in centimeters"
+        },
+        "heightCm": {
+          "type": "number",
+          "description": "Unit height in centimeters"
+        },
+        "elevationCm": {
+          "type": "number",
+          "description": "Mounting elevation from floor in centimeters"
+        },
+        "posXCm": {
+          "type": "number",
+          "description": "2D/3D X coordinate in centimeters"
+        },
+        "posYCm": {
+          "type": "number",
+          "description": "2D/3D Y (depth) coordinate in centimeters"
+        },
+        "rotationDeg": {
+          "type": "number",
+          "description": "Rotation angle in degrees"
+        },
+        "materialId": {
+          "type": "string",
+          "description": "Assigned surface material ID"
+        },
+        "unitPriceUsd": {
+          "type": "number",
+          "description": "Automatically calculated unit cost in USD based on dimensions and material"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the component was saved"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the component was updated"
+        }
+      },
+      "required": [
+        "userId",
+        "designId",
+        "nameAr",
+        "category",
+        "typeName",
+        "widthCm",
+        "depthCm",
+        "heightCm",
+        "elevationCm",
+        "posXCm",
+        "posYCm",
+        "rotationDeg",
+        "materialId",
+        "unitPriceUsd",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/kitchen_designs/{designId}": {
+      "schema": {
+        "$ref": "#/entities/KitchenDesign"
+      },
+      "description": "Per-user saved 2D/3D kitchen designs with automatic cost breakdown and full JSON layout"
+    },
+    "/users/{userId}/kitchen_components/{componentId}": {
+      "schema": {
+        "$ref": "#/entities/KitchenComponent"
+      },
+      "description": "Per-user saved kitchen components/units with size, 2D/3D coordinates, material, and price"
+    }
+  }
+}

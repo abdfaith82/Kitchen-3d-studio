@@ -29,15 +29,19 @@ class KitchenProjectRepositoryImpl(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) : KitchenProjectRepository, Closeable {
 
-    private val templates = listOf(
-        createLShapedTemplate(),
-        createLuxuryDoubleTierVitrineTemplate(),
-        createIslandTemplate(),
-        createUShapedTemplate(),
-        createLinearTemplate()
-    )
+    private val initialTemplate = createLShapedTemplate()
 
-    private val _currentProject = MutableStateFlow(templates[0])
+    private val templates by lazy {
+        listOf(
+            initialTemplate,
+            createLuxuryDoubleTierVitrineTemplate(),
+            createIslandTemplate(),
+            createUShapedTemplate(),
+            createLinearTemplate()
+        )
+    }
+
+    private val _currentProject = MutableStateFlow(initialTemplate)
 
     init {
         if (dao != null) {
@@ -45,11 +49,13 @@ class KitchenProjectRepositoryImpl(
                 try {
                     dao.getActiveProjectWithAssets().collect { dbProject ->
                         if (dbProject != null) {
-                            _currentProject.value = dbProject.toDomainProject()
+                            val domainProj = dbProject.toDomainProject()
+                            if (_currentProject.value != domainProj) {
+                                _currentProject.value = domainProj
+                            }
                         } else {
                             // Bootstrap database with initial L-Shaped template
-                            val initial = templates[0]
-                            val (meta, assets, openings) = ProjectWithAssets.fromDomain(initial)
+                            val (meta, assets, openings) = ProjectWithAssets.fromDomain(initialTemplate)
                             dao.saveFullProjectWithAssets(meta, assets, openings)
                         }
                     }
@@ -67,10 +73,13 @@ class KitchenProjectRepositoryImpl(
     override fun getProject(): Flow<KitchenProject> = _currentProject.asStateFlow()
 
     override suspend fun updateProject(project: KitchenProject) {
+        val changed = _currentProject.value != project
         _currentProject.value = project
-        dao?.let {
-            val (meta, assets, openings) = ProjectWithAssets.fromDomain(project)
-            it.saveFullProjectWithAssets(meta, assets, openings)
+        if (dao != null && changed) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val (meta, assets, openings) = ProjectWithAssets.fromDomain(project)
+                dao.saveFullProjectWithAssets(meta, assets, openings)
+            }
         }
     }
 
@@ -80,8 +89,10 @@ class KitchenProjectRepositoryImpl(
         templates.find { it.id == templateId }?.let { template ->
             _currentProject.value = template
             dao?.let {
-                val (meta, assets, openings) = ProjectWithAssets.fromDomain(template)
-                it.saveFullProjectWithAssets(meta, assets, openings)
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val (meta, assets, openings) = ProjectWithAssets.fromDomain(template)
+                    it.saveFullProjectWithAssets(meta, assets, openings)
+                }
             }
         }
     }
@@ -230,7 +241,10 @@ class KitchenProjectRepositoryImpl(
         return dao?.getProjectWithAssets(projectId)?.firstOrNull()?.toDomainProject()
     }
 
-    override fun generateBillOfMaterials(project: KitchenProject): BillOfMaterials {
+    override fun generateBillOfMaterials(
+        project: KitchenProject,
+        enabledAccessoryIds: Set<String>
+    ): BillOfMaterials {
         val grouped = project.elements.groupBy { it.type.code to it.material.name }
         val items = grouped.map { (_, list) ->
             val first = list.first()
@@ -240,15 +254,32 @@ class KitchenProjectRepositoryImpl(
                 quantity = list.size,
                 dimensionsMm = "${first.dimensions.x.toInt()} × ${first.dimensions.y.toInt()} × ${first.dimensions.z.toInt()} مم",
                 finishName = first.material.name,
-                categoryName = first.type.category.displayName
+                categoryName = first.type.category.displayName,
+                widthMm = first.dimensions.x,
+                heightMm = first.dimensions.y,
+                depthMm = first.dimensions.z
             )
         }.sortedBy { it.categoryName }
 
         val baseElements = project.elements.filter { it.type.category == ElementCategory.BASE_CABINET }
+        val upperAndTallElements = project.elements.filter {
+            it.type.category == ElementCategory.WALL_CABINET || it.type.category == ElementCategory.TALL_UNIT
+        }
         val totalLinearMm = baseElements.sumOf { it.dimensions.x.toDouble() }.toFloat()
         val totalLinearM = totalLinearMm / 1000f
 
         val countertopAreaSqM = baseElements.sumOf { (it.dimensions.x * it.dimensions.z).toDouble() }.toFloat() / 1_000_000f
+
+        val matchedAccessories = SmartAccessoryMatcher.matchAccessoriesForElements(
+            elements = project.elements,
+            enabledAccessoryIds = enabledAccessoryIds
+        )
+        val totalAccessoriesCount = matchedAccessories.sumOf { it.quantity }
+        val accessoriesCostUsd = matchedAccessories.sumOf { it.totalCostUsd.toDouble() }.toFloat()
+        val cabinetsCostUsd = (totalLinearM * com.example.core.units.MeasurementUnitSystem.BASE_RATE_PER_LINEAR_METER_USD) +
+            (upperAndTallElements.size * com.example.core.units.MeasurementUnitSystem.UPPER_CABINET_UNIT_AVERAGE_USD)
+        val countertopCostUsd = countertopAreaSqM * com.example.core.units.MeasurementUnitSystem.COUNTERTOP_RATE_PER_SQ_METER_USD
+        val totalEstimatedCostUsd = cabinetsCostUsd + countertopCostUsd + accessoriesCostUsd
 
         val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
@@ -258,7 +289,13 @@ class KitchenProjectRepositoryImpl(
             totalCabinetsCount = project.elements.size,
             totalLinearMeters = totalLinearM,
             countertopAreaSquareMeters = countertopAreaSqM,
-            generatedDate = dateFormat.format(Date())
+            generatedDate = dateFormat.format(Date()),
+            matchedAccessories = matchedAccessories,
+            totalAccessoriesCount = totalAccessoriesCount,
+            cabinetsEstimatedCostUsd = cabinetsCostUsd,
+            countertopEstimatedCostUsd = countertopCostUsd,
+            accessoriesEstimatedCostUsd = accessoriesCostUsd,
+            totalEstimatedProjectCostUsd = totalEstimatedCostUsd
         )
     }
 
@@ -640,15 +677,38 @@ class KitchenProjectRepositoryImpl(
             )
 
             val elements = listOf(
+                // North Wall: Left drawers (x=1050, w=700 -> 700..1400), Central Sink (x=1850, w=900 -> 1400..2300), Right Base (x=2650, w=700 -> 2300..3000)
+                KitchenElement(
+                    id = "u_base_north_left",
+                    name = "خزانة أدراج شمالية",
+                    type = KitchenElementType.BASE_3_DRAWERS,
+                    position = Vector3(1050f, 0f, 300f),
+                    rotationY = 0f,
+                    dimensions = Vector3(700f, 850f, 600f),
+                    material = MaterialFinish.SAGE_GREEN,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
+                ),
                 KitchenElement(
                     id = "u_sink",
                     name = "حوض غسيل مركزي",
                     type = KitchenElementType.BASE_SINK_UNIT,
-                    position = Vector3(1900f, 0f, 300f),
+                    position = Vector3(1850f, 0f, 300f),
                     rotationY = 0f,
-                    dimensions = Vector3(800f, 850f, 600f),
-                    material = MaterialFinish.SAGE_GREEN
+                    dimensions = Vector3(900f, 850f, 600f),
+                    material = MaterialFinish.SAGE_GREEN,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
                 ),
+                KitchenElement(
+                    id = "u_base_north_right",
+                    name = "خزانة تحضير شمالية",
+                    type = KitchenElementType.BASE_DOUBLE_DOOR,
+                    position = Vector3(2650f, 0f, 300f),
+                    rotationY = 0f,
+                    dimensions = Vector3(700f, 850f, 600f),
+                    material = MaterialFinish.SAGE_GREEN,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
+                ),
+                // West Wall (X = 300, rotY = 90 -> Z spans 1050..1950)
                 KitchenElement(
                     id = "u_base_west",
                     name = "خزانة غربية",
@@ -656,8 +716,10 @@ class KitchenProjectRepositoryImpl(
                     position = Vector3(300f, 0f, 1500f),
                     rotationY = 90f,
                     dimensions = Vector3(900f, 850f, 600f),
-                    material = MaterialFinish.SAGE_GREEN
+                    material = MaterialFinish.SAGE_GREEN,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
                 ),
+                // East Wall (X = 3500, rotY = 270 -> Z spans 1050..1950)
                 KitchenElement(
                     id = "u_base_east",
                     name = "خزانة شرقية مع مسطح",
@@ -665,7 +727,18 @@ class KitchenProjectRepositoryImpl(
                     position = Vector3(3500f, 0f, 1500f),
                     rotationY = 270f,
                     dimensions = Vector3(900f, 850f, 600f),
-                    material = MaterialFinish.SAGE_GREEN
+                    material = MaterialFinish.SAGE_GREEN,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
+                ),
+                // Upper Wall Cabinets on North Wall
+                KitchenElement(
+                    id = "u_wall_north_1",
+                    name = "خزانة علوية زجاجية",
+                    type = KitchenElementType.WALL_GLASS_BLACK_FRAME,
+                    position = Vector3(1850f, 1450f, 175f),
+                    rotationY = 0f,
+                    dimensions = Vector3(900f, 720f, 350f),
+                    material = MaterialFinish.SMOKED_GLASS_ALU
                 )
             )
 
@@ -694,7 +767,8 @@ class KitchenProjectRepositoryImpl(
                     position = Vector3(800f, 0f, 300f),
                     rotationY = 0f,
                     dimensions = Vector3(800f, 850f, 600f),
-                    material = MaterialFinish.NAVY_BLUE
+                    material = MaterialFinish.NAVY_BLUE,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
                 ),
                 KitchenElement(
                     id = "lin_drawers",
@@ -703,7 +777,18 @@ class KitchenProjectRepositoryImpl(
                     position = Vector3(1500f, 0f, 300f),
                     rotationY = 0f,
                     dimensions = Vector3(600f, 850f, 600f),
-                    material = MaterialFinish.NAVY_BLUE
+                    material = MaterialFinish.NAVY_BLUE,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
+                ),
+                KitchenElement(
+                    id = "lin_under_oven",
+                    name = "خزانة فرن سفلي",
+                    type = KitchenElementType.BASE_UNDER_OVEN,
+                    position = Vector3(2100f, 0f, 300f),
+                    rotationY = 0f,
+                    dimensions = Vector3(600f, 850f, 600f),
+                    material = MaterialFinish.NAVY_BLUE,
+                    countertopMaterial = MaterialFinish.CARRARA_MARBLE
                 ),
                 KitchenElement(
                     id = "lin_cooktop",

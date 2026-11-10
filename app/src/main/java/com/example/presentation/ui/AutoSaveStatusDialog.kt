@@ -116,9 +116,9 @@ fun AutoSaveStatusBadge(
                 )
                 Text(
                     text = if (autoSaveState.isEnabled) {
-                        "كل ${autoSaveState.intervalSeconds} ث • ${autoSaveState.lastSavedFormattedTime}"
+                        "دوري كل ${autoSaveState.intervalSeconds}ث (القادم: ${autoSaveState.secondsUntilNextSave}ث) • ${autoSaveState.lastSavedFormattedTime}"
                     } else {
-                        "متوقف مؤقتاً"
+                        "الحفظ الدوري متوقف مؤقتاً"
                     },
                     color = Color(0xFF9CA3AF),
                     fontSize = 8.5.sp
