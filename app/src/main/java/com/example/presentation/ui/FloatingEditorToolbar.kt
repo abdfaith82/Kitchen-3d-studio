@@ -225,6 +225,7 @@ fun FloatingEditorToolbar(
                     onUpdateRoomDimensions = onUpdateRoomDimensions,
                     onUpdateWallThickness = onUpdateWallThickness,
                     onQuickAddOpening = onQuickAddOpening,
+                    onOpenRoomBuilder = { onOpenDialog(ActiveDialog.RoomBuilder) },
                     onOpenSketch = { onOpenDialog(ActiveDialog.SketchCanvas) },
                     onOpenRoomSettings = { onOpenDialog(ActiveDialog.RoomSettings) },
                     onCloseSubPanel = onToggleWallCreation
@@ -355,6 +356,7 @@ fun FloatingEditorToolbar(
                     onUpdateRoomDimensions = onUpdateRoomDimensions,
                     onUpdateWallThickness = onUpdateWallThickness,
                     onQuickAddOpening = onQuickAddOpening,
+                    onOpenRoomBuilder = { onOpenDialog(ActiveDialog.RoomBuilder) },
                     onOpenSketch = { onOpenDialog(ActiveDialog.SketchCanvas) },
                     onOpenRoomSettings = { onOpenDialog(ActiveDialog.RoomSettings) },
                     onCloseSubPanel = onToggleWallCreation
@@ -537,6 +539,7 @@ private fun WallCreationSubPanel(
     onUpdateRoomDimensions: (Float, Float, Float) -> Unit,
     onUpdateWallThickness: (Float) -> Unit,
     onQuickAddOpening: (String, OpeningType) -> Unit,
+    onOpenRoomBuilder: () -> Unit,
     onOpenSketch: () -> Unit,
     onOpenRoomSettings: () -> Unit,
     onCloseSubPanel: () -> Unit
@@ -580,7 +583,23 @@ private fun WallCreationSubPanel(
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalButton(
+                        onClick = onOpenRoomBuilder,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .height(26.dp)
+                            .testTag("wall_room_builder_btn"),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF065F46),
+                            contentColor = Color(0xFF6EE7B7)
+                        )
+                    ) {
+                        Icon(Icons.Default.GridOn, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("شبكة الغرفة", fontSize = 10.sp)
+                    }
+
                     FilledTonalButton(
                         onClick = onOpenSketch,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),

@@ -1311,4 +1311,50 @@ class KitchenStudioEngineTest {
         assertTrue(distribution.laborCostUsd.isFinite() && distribution.laborCostUsd > 0.0)
         assertTrue(distribution.accessoriesCostUsd.isFinite() && distribution.accessoriesCostUsd >= 0.0)
     }
+
+    @Test
+    fun testRoomBuilderGridEngine_SnapAndBuildRoomStructure() {
+        val snapped = com.example.core.geometry.RoomBuilderGridEngine.snapPointToGrid(
+            xMm = 1130f,
+            zMm = 2390f,
+            gridStepMm = 250f
+        )
+        assertEquals(1250f, snapped.xMm, 0.001f)
+        assertEquals(2500f, snapped.zMm, 0.001f)
+
+        val orthoEnd = com.example.core.geometry.RoomBuilderGridEngine.applyOrthogonalSnap(
+            startXMm = 500f,
+            startZMm = 500f,
+            rawEndXMm = 4500f,
+            rawEndZMm = 610f,
+            gridStepMm = 250f,
+            enableAngleSnap = true
+        )
+        assertEquals(500f, orthoEnd.zMm, 0.001f)
+        assertEquals(4500f, orthoEnd.xMm, 0.001f)
+
+        val lShapeSegments = com.example.core.geometry.RoomBuilderGridEngine.createPresetSegments(
+            shape = RoomLayoutShape.L_SHAPE,
+            widthMm = 4500f,
+            depthMm = 3200f,
+            heightMm = 2800f,
+            thicknessMm = 150f
+        )
+        assertEquals(2, lShapeSegments.size)
+
+        val builtLRoom = com.example.core.geometry.RoomBuilderGridEngine.buildRoomStructure(
+            segments = lShapeSegments,
+            fallbackWidthMm = 4500f,
+            fallbackDepthMm = 3200f,
+            ceilingHeightMm = 2800f,
+            wallThicknessMm = 150f
+        )
+        assertEquals(4500f, builtLRoom.widthMm, 0.001f)
+        assertEquals(3200f, builtLRoom.depthMm, 0.001f)
+        assertEquals(2800f, builtLRoom.heightMm, 0.001f)
+        assertEquals(RoomLayoutShape.L_SHAPE, builtLRoom.layoutShape)
+        assertTrue(builtLRoom.walls.first { it.side == WallSide.NORTH }.isEnabled)
+        assertTrue(builtLRoom.walls.first { it.side == WallSide.WEST }.isEnabled)
+        assertFalse(builtLRoom.walls.first { it.side == WallSide.SOUTH }.isEnabled)
+    }
 }

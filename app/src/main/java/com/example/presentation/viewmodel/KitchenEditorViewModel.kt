@@ -87,6 +87,7 @@ sealed class ActiveDialog {
     data object GeminiAiDesigner : ActiveDialog()
     data object SmartAccessories : ActiveDialog()
     data object PhotoCabinetDesigner : ActiveDialog()
+    data object RoomBuilder : ActiveDialog()
 }
 
 data class KitchenEditorUiState(
