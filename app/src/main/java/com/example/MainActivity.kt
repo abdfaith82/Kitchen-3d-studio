@@ -1,5 +1,6 @@
 package com.example
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -73,11 +74,21 @@ fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
     awaitClose { auth.removeAuthStateListener(listener) }
 }
 
+@SuppressLint("DiscouragedApi")
+fun resolveDefaultWebClientId(context: Context): String {
+    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+    if (resId != 0) {
+        val value = runCatching { context.getString(resId) }.getOrDefault("").trim()
+        if (value.isNotEmpty()) return value
+    }
+    return ""
+}
+
 suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser?> {
     if (auth.currentUser != null) return Result.success(auth.currentUser)
     return try {
         val credentialManager = CredentialManager.create(activityContext)
-        val webClientId = activityContext.getString(R.string.default_web_client_id)
+        val webClientId = resolveDefaultWebClientId(activityContext)
         if (webClientId.isBlank()) return Result.success(null)
 
         val googleIdOption = GetGoogleIdOption.Builder()
@@ -117,9 +128,9 @@ suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Res
 suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser> {
     return try {
         val credentialManager = CredentialManager.create(activityContext)
-        val webClientId = activityContext.getString(R.string.default_web_client_id)
+        val webClientId = resolveDefaultWebClientId(activityContext)
         if (webClientId.isBlank()) {
-            return Result.failure(IllegalStateException("معرّف عميل Google غير مهيأ في الإعدادات"))
+            return Result.failure(IllegalStateException("معرّف عميل Google غير مهيأ — يرجى التأكد من وجود ملف google-services.json"))
         }
 
         val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()

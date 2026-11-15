@@ -42,6 +42,11 @@ jobs:
             cp .env.example .env
           fi
 
+          # Restore app/google-services.json from optional GitHub Secret if absent in repo
+          if [ ! -f app/google-services.json ] && [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            printf '%s' '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          fi
+
           # Remove any stale KSP generated directory if cached
           rm -rf app/build/generated/ksp
 
