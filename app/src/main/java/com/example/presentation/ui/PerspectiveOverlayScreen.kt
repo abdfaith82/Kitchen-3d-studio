@@ -31,6 +31,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -1210,13 +1213,13 @@ fun PerspectiveOverlayDialog(
                                             onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(-50f, 0f, 0f)) },
                                             modifier = Modifier.size(24.dp)
                                         ) {
-                                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "X-", tint = Color.White, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "X-", tint = Color.White, modifier = Modifier.size(16.dp))
                                         }
                                         IconButton(
                                             onClick = { onMoveElement(selectedElement.id, selectedElement.position + Vector3(50f, 0f, 0f)) },
                                             modifier = Modifier.size(24.dp)
                                         ) {
-                                            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "X+", tint = Color.White, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "X+", tint = Color.White, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1254,7 +1257,7 @@ fun PerspectiveOverlayDialog(
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                         modifier = Modifier.height(28.dp)
                                     ) {
-                                        Icon(Icons.Default.RotateRight, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null, modifier = Modifier.size(14.dp))
                                         Spacer(modifier = Modifier.width(3.dp))
                                         Text("تدوير 90°", fontSize = 10.sp)
                                     }
@@ -1881,10 +1884,13 @@ private fun LiveCameraPreviewLayer(
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val executor = ContextCompat.getMainExecutor(context)
         var cameraProvider: ProcessCameraProvider? = null
+        var isDisposed = false
 
         val listener = Runnable {
+            if (isDisposed) return@Runnable
             try {
                 cameraProvider = cameraProviderFuture.get()
+                if (isDisposed) return@Runnable
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -1898,6 +1904,7 @@ private fun LiveCameraPreviewLayer(
         cameraProviderFuture.addListener(listener, executor)
 
         onDispose {
+            isDisposed = true
             try {
                 cameraProvider?.unbindAll()
             } catch (_: Exception) {

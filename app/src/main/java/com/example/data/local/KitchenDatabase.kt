@@ -35,7 +35,7 @@ abstract class KitchenDatabase : RoomDatabase() {
                     KitchenDatabase::class.java,
                     "kitchen_studio_offline.db"
                 )
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance
                 instance

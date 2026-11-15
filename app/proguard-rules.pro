@@ -1,21 +1,35 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Add project specific ProGuard / R8 rules here.
+# Preserve stack traces for crash diagnostics
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Room Database (explicitly keep manually provided _Impl and Entities/DAOs)
+-keep class com.example.data.local.KitchenDatabase { *; }
+-keep class com.example.data.local.KitchenDatabase_Impl { *; }
+-keep class com.example.data.local.dao.** { *; }
+-keep class com.example.data.local.entity.** { *; }
+-keep class com.example.data.local.relation.** { *; }
+-keep class * extends androidx.room.RoomDatabase
+-dontwarn androidx.room.paging.**
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Firebase Firestore Models (@IgnoreExtraProperties, @DocumentId, @ServerTimestamp)
+-keepattributes Signature
+-keepclassmembers class com.example.data.remote.FirestoreKitchenDesign {
+    <init>(...);
+    *;
+}
+-keepclassmembers class com.example.data.remote.FirestoreKitchenComponent {
+    <init>(...);
+    *;
+}
+-keepclassmembers class * {
+    @com.google.firebase.firestore.DocumentId *;
+    @com.google.firebase.firestore.ServerTimestamp *;
+    @com.google.firebase.firestore.PropertyName *;
+}
+-keep @com.google.firebase.firestore.IgnoreExtraProperties class * { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Domain Models used in serialization & JSON export
+-keep class com.example.domain.model.** { *; }
+-keep class com.example.core.math.Vector3 { *; }

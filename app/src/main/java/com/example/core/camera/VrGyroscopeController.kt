@@ -69,18 +69,23 @@ fun rememberVrGyroscopeEffect(
                 when (event.sensor.type) {
                     Sensor.TYPE_GAME_ROTATION_VECTOR,
                     Sensor.TYPE_ROTATION_VECTOR -> {
-                        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                        // Remap coordinate system for upright/landscape handheld viewing
-                        SensorManager.remapCoordinateSystem(
-                            rotationMatrix,
-                            SensorManager.AXIS_X,
-                            SensorManager.AXIS_Z,
-                            remappedMatrix
-                        )
-                        SensorManager.getOrientation(remappedMatrix, orientationAngles)
+                        if (event.values.size < 3) return
+                        val computed = runCatching {
+                            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                            // Remap coordinate system for upright/landscape handheld viewing
+                            SensorManager.remapCoordinateSystem(
+                                rotationMatrix,
+                                SensorManager.AXIS_X,
+                                SensorManager.AXIS_Z,
+                                remappedMatrix
+                            )
+                            SensorManager.getOrientation(remappedMatrix, orientationAngles)
+                        }.isSuccess
+                        if (!computed) return
 
                         val azimuthDeg = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
                         val pitchDeg = Math.toDegrees(orientationAngles[1].toDouble()).toFloat()
+                        if (!azimuthDeg.isFinite() || !pitchDeg.isFinite()) return
 
                         val prevYaw = lastYawDeg
                         val prevPitch = lastPitchDeg
@@ -106,19 +111,22 @@ fun rememberVrGyroscopeEffect(
                     }
 
                     Sensor.TYPE_GYROSCOPE -> {
+                        if (event.values.size < 3) return
                         if (lastGyroTimestampNs != 0L) {
                             val dtSec = (event.timestamp - lastGyroTimestampNs) * 1e-9f
                             if (dtSec in 0.001f..0.25f) {
                                 // Gyro values are rad/s around X (pitch), Y (yaw in portrait), Z
                                 val pitchRateDeg = Math.toDegrees(event.values[0].toDouble()).toFloat()
                                 val yawRateDeg = -Math.toDegrees(event.values[1].toDouble()).toFloat()
-                                val dYaw = yawRateDeg * dtSec
-                                val dPitch = pitchRateDeg * dtSec
-                                if (abs(dYaw) > 0.05f || abs(dPitch) > 0.05f) {
-                                    currentOnLookDelta(
-                                        dYaw.coerceIn(-12f, 12f),
-                                        dPitch.coerceIn(-8f, 8f)
-                                    )
+                                if (pitchRateDeg.isFinite() && yawRateDeg.isFinite()) {
+                                    val dYaw = yawRateDeg * dtSec
+                                    val dPitch = pitchRateDeg * dtSec
+                                    if (abs(dYaw) > 0.05f || abs(dPitch) > 0.05f) {
+                                        currentOnLookDelta(
+                                            dYaw.coerceIn(-12f, 12f),
+                                            dPitch.coerceIn(-8f, 8f)
+                                        )
+                                    }
                                 }
                             }
                         }

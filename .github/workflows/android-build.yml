@@ -62,6 +62,17 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Run Unit Tests
+        run: |
+          gradle :app:testDebugUnitTest \
+            --tests "com.example.ExampleUnitTest" \
+            --tests "com.example.AluminumBarNestingOptimizerTest" \
+            --tests "com.example.ExportAndPackagingTest" \
+            --no-configuration-cache \
+            -Djava.awt.headless=true \
+            -Dkotlin.compiler.execution.strategy=daemon \
+            --stacktrace
+
       - name: Build Debug APK
         run: |
           gradle :app:assembleDebug \

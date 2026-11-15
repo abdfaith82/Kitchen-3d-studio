@@ -65,43 +65,47 @@ object PdfBlueprintExporter {
         config: PdfExportConfig = PdfExportConfig()
     ) {
         val document = PdfDocument()
-        var pageNumber = 1
+        try {
+            var pageNumber = 1
 
-        val manufacturingReport = if (config.includeCutList) {
-            NestingEngine.calculateCompleteReport(cabinets)
-        } else null
+            val manufacturingReport = if (config.includeCutList) {
+                NestingEngine.calculateCompleteReport(cabinets)
+            } else null
 
-        // PAGE 1: 2D Engineering Architectural & MEP Executive Blueprint (with Layer Separation in cm)
-        if (config.includeBlueprint) {
-            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
-            val page = document.startPage(pageInfo)
-            drawBlueprintPage(page.canvas, project, config, pageNumber)
-            document.finishPage(page)
-            pageNumber++
+            // PAGE 1: 2D Engineering Architectural & MEP Executive Blueprint (with Layer Separation in cm)
+            if (config.includeBlueprint) {
+                val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
+                val page = document.startPage(pageInfo)
+                drawBlueprintPage(page.canvas, project, config, pageNumber)
+                document.finishPage(page)
+                pageNumber++
+            }
+
+            // PAGE 2: Bill of Materials (BOM) & Summary
+            if (config.includeBom) {
+                val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
+                val page = document.startPage(pageInfo)
+                drawBomPage(page.canvas, project, bom, manufacturingReport, config, pageNumber)
+                document.finishPage(page)
+                pageNumber++
+            }
+
+            // PAGE 3: CAM Manufacturing Cut List & Nesting Report
+            if (config.includeCutList && manufacturingReport != null) {
+                val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
+                val page = document.startPage(pageInfo)
+                drawCutListPage(page.canvas, project, cabinets, manufacturingReport, config, pageNumber)
+                document.finishPage(page)
+                pageNumber++
+            }
+
+            file.parentFile?.mkdirs()
+            FileOutputStream(file).use { fos ->
+                document.writeTo(fos)
+            }
+        } finally {
+            document.close()
         }
-
-        // PAGE 2: Bill of Materials (BOM) & Summary
-        if (config.includeBom) {
-            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
-            val page = document.startPage(pageInfo)
-            drawBomPage(page.canvas, project, bom, manufacturingReport, config, pageNumber)
-            document.finishPage(page)
-            pageNumber++
-        }
-
-        // PAGE 3: CAM Manufacturing Cut List & Nesting Report
-        if (config.includeCutList && manufacturingReport != null) {
-            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
-            val page = document.startPage(pageInfo)
-            drawCutListPage(page.canvas, project, cabinets, manufacturingReport, config, pageNumber)
-            document.finishPage(page)
-            pageNumber++
-        }
-
-        FileOutputStream(file).use { fos ->
-            document.writeTo(fos)
-        }
-        document.close()
     }
 
     /**

@@ -12,6 +12,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.ViewSidebar
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -196,7 +202,7 @@ fun KitchenStudioScreen(
                             modifier = Modifier.testTag("top_bar_sign_out_btn")
                         ) {
                             Icon(
-                                Icons.Default.Logout,
+                                Icons.AutoMirrored.Filled.Logout,
                                 contentDescription = "تسجيل الخروج من حساب Google",
                                 tint = Color(0xFFF87171)
                             )
@@ -221,7 +227,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("toggle_collapsible_sidebar_btn")
                     ) {
                         Icon(
-                            if (state.isCollapsibleSidebarOpen) Icons.Default.ViewSidebar else Icons.Default.MenuOpen,
+                            if (state.isCollapsibleSidebarOpen) Icons.AutoMirrored.Filled.ViewSidebar else Icons.AutoMirrored.Filled.MenuOpen,
                             contentDescription = "طي/فتح اللوحة الجانبية النحيفة",
                             tint = if (state.isCollapsibleSidebarOpen) Color(0xFF34D399) else Color(0xFF94A3B8)
                         )
@@ -313,7 +319,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("undo_button")
                     ) {
                         Icon(
-                            Icons.Default.Undo,
+                            Icons.AutoMirrored.Filled.Undo,
                             contentDescription = "تراجع (Undo)",
                             tint = if (state.undoRedoState.canUndo) Color(0xFF38BDF8) else Color(0xFF475569)
                         )
@@ -326,7 +332,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("redo_button")
                     ) {
                         Icon(
-                            Icons.Default.Redo,
+                            Icons.AutoMirrored.Filled.Redo,
                             contentDescription = "إعادة (Redo)",
                             tint = if (state.undoRedoState.canRedo) Color(0xFF38BDF8) else Color(0xFF475569)
                         )
@@ -424,7 +430,7 @@ fun KitchenStudioScreen(
                         onClick = { viewModel.openDialog(ActiveDialog.BillOfMaterialsDialog) },
                         modifier = Modifier.testTag("open_bom_button")
                     ) {
-                        Icon(Icons.Default.ReceiptLong, contentDescription = "جدول الكميات BOM", tint = Color(0xFF10B981))
+                        Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "جدول الكميات BOM", tint = Color(0xFF10B981))
                     }
 
                     // Quick JSON Files & Elements Export Button

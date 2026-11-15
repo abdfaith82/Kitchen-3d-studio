@@ -56,13 +56,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
-fun Context.findActivity(): Activity {
+fun Context.findActivityOrNull(): Activity? {
     var context = this
     while (context is ContextWrapper) {
         if (context is Activity) return context
         context = context.baseContext
     }
-    throw IllegalStateException("Credentials must be requested from an Activity context.")
+    return null
 }
 
 fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
@@ -75,20 +75,21 @@ fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
 
 suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser?> {
     if (auth.currentUser != null) return Result.success(auth.currentUser)
-    val credentialManager = CredentialManager.create(activityContext)
-    val webClientId = activityContext.getString(R.string.default_web_client_id)
-
-    val googleIdOption = GetGoogleIdOption.Builder()
-        .setServerClientId(webClientId)
-        .setFilterByAuthorizedAccounts(true)
-        .setAutoSelectEnabled(true)
-        .build()
-
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(googleIdOption)
-        .build()
-
     return try {
+        val credentialManager = CredentialManager.create(activityContext)
+        val webClientId = activityContext.getString(R.string.default_web_client_id)
+        if (webClientId.isBlank()) return Result.success(null)
+
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setServerClientId(webClientId)
+            .setFilterByAuthorizedAccounts(true)
+            .setAutoSelectEnabled(true)
+            .build()
+
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+
         val result = credentialManager.getCredential(activityContext, request)
         val credential = result.credential
         if (credential is CustomCredential &&
@@ -114,15 +115,18 @@ suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Res
 }
 
 suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser> {
-    val credentialManager = CredentialManager.create(activityContext)
-    val webClientId = activityContext.getString(R.string.default_web_client_id)
-
-    val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(signInWithGoogleOption)
-        .build()
-
     return try {
+        val credentialManager = CredentialManager.create(activityContext)
+        val webClientId = activityContext.getString(R.string.default_web_client_id)
+        if (webClientId.isBlank()) {
+            return Result.failure(IllegalStateException("معرّف عميل Google غير مهيأ في الإعدادات"))
+        }
+
+        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(signInWithGoogleOption)
+            .build()
+
         val result = credentialManager.getCredential(activityContext, request)
         val credential = result.credential
         if (credential is CustomCredential &&
@@ -131,7 +135,9 @@ suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth)
             val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
             val firebaseCredential = GoogleAuthProvider.getCredential(googleIdTokenCredential.idToken, null)
             val authResult = auth.signInWithCredential(firebaseCredential).await()
-            Result.success(authResult.user!!)
+            val signedInUser = authResult.user
+                ?: return Result.failure(IllegalStateException("تعذر استرداد بيانات المستخدم من Firebase"))
+            Result.success(signedInUser)
         } else {
             Result.failure(IllegalStateException("نوع بيانات اعتماد غير مدعوم"))
         }
@@ -194,9 +200,10 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     var isSigningIn by remember { mutableStateOf(false) }
 
     LaunchedEffect(auth) {
-        if (auth != null && auth.currentUser == null) {
+        val activity = context.findActivityOrNull()
+        if (auth != null && auth.currentUser == null && activity != null) {
             try {
-                attemptAutoSignIn(context.findActivity(), auth)
+                attemptAutoSignIn(activity, auth)
             } catch (_: Exception) {
             } finally {
                 isCheckingSilentAuth = false
@@ -231,11 +238,19 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
             isLoading = isCheckingSilentAuth || isSigningIn,
             errorMessage = authErrorMessage,
             onSignInClick = {
-                if (auth == null) return@GoogleAuthGateScreen
+                if (auth == null) {
+                    authErrorMessage = "خدمة Firebase Auth غير متاحة حالياً، يرجى التحقق من الاتصال."
+                    return@GoogleAuthGateScreen
+                }
+                val activity = context.findActivityOrNull()
+                if (activity == null) {
+                    authErrorMessage = "تعذر تحديد نافذة النشاط الحالية لتسجيل الدخول."
+                    return@GoogleAuthGateScreen
+                }
                 scope.launch {
                     isSigningIn = true
                     authErrorMessage = null
-                    val res = signInWithGoogleButton(context.findActivity(), auth)
+                    val res = signInWithGoogleButton(activity, auth)
                     isSigningIn = false
                     res.onFailure { err ->
                         if (err !is GetCredentialCancellationException) {

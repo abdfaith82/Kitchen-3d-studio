@@ -1282,4 +1282,33 @@ class KitchenStudioEngineTest {
         )
         assertEquals(2, distribution.unitCostsByElementId.size)
     }
+
+    @Test
+    fun testKitchenCostCalculator_NonFiniteInputsAreSanitized() {
+        val room = RoomStructure(widthMm = 4000f, depthMm = 3500f, heightMm = 2800f)
+        val corruptedElement = KitchenElement(
+            id = "cab_nan",
+            name = "خزانة قياس غير صالحة",
+            type = KitchenElementType.BASE_SINGLE_DOOR,
+            position = Vector3(Float.NaN, 0f, Float.POSITIVE_INFINITY),
+            dimensions = Vector3(Float.NaN, 850f, Float.NEGATIVE_INFINITY),
+            material = MaterialFinish.NATURAL_OAK
+        )
+        val project = com.example.domain.repository.KitchenProject(
+            id = "proj_nan_test",
+            name = "مطبخ اختبار القيم غير المنتهية",
+            room = room,
+            elements = listOf(corruptedElement)
+        )
+
+        val distribution = com.example.data.remote.KitchenCostCalculator.calculateProjectCostDistribution(
+            project = project,
+            accessoriesCostUsd = Double.NaN
+        )
+
+        assertTrue(distribution.totalCostUsd.isFinite() && distribution.totalCostUsd > 0.0)
+        assertTrue(distribution.materialsTotalUsd.isFinite() && distribution.materialsTotalUsd > 0.0)
+        assertTrue(distribution.laborCostUsd.isFinite() && distribution.laborCostUsd > 0.0)
+        assertTrue(distribution.accessoriesCostUsd.isFinite() && distribution.accessoriesCostUsd >= 0.0)
+    }
 }

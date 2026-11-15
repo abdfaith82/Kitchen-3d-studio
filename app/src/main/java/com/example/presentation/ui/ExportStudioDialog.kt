@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -824,7 +825,7 @@ private fun PdfBlueprintExportSection(
         ExportCheckboxItem(
             title = "صفحة 2: جدول حصر الكميات والمواد (BOM)",
             desc = "تفصيل أبعاد وخامات كل خزانة، الأمتار الطولية، مسطح الرخام ومؤشرات تكلفة التصنيع",
-            icon = Icons.Default.ReceiptLong,
+            icon = Icons.AutoMirrored.Filled.ReceiptLong,
             checked = includeBom,
             onCheckedChange = onToggleBom
         )

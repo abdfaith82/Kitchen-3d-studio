@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ViewSidebar
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -506,7 +507,7 @@ fun PhotoCabinetDesignerDialog(
                                         )
                                     } else {
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Icon(Icons.Default.ViewSidebar, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(28.dp))
+                                            Icon(Icons.AutoMirrored.Filled.ViewSidebar, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(28.dp))
                                             Text("تحديد خامة الجنب والعمق", color = Color(0xFF94A3B8), fontSize = 10.sp)
                                         }
                                     }

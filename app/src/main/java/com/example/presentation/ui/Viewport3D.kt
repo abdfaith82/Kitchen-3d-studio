@@ -9,6 +9,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -1119,10 +1121,10 @@ fun Viewport3D(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("X:", color = Color(0xFFEF4444), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 IconButton(onClick = { onMoveSelected(-50f, 0f, 0f) }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "X-", tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "X-", tint = Color.White, modifier = Modifier.size(16.dp))
                                 }
                                 IconButton(onClick = { onMoveSelected(50f, 0f, 0f) }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = "X+", tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "X+", tint = Color.White, modifier = Modifier.size(16.dp))
                                 }
                             }
                             // Z Axis (Depth)

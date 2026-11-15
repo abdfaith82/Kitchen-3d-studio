@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -1397,7 +1399,7 @@ fun Viewport2D(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            Icons.Default.Undo,
+                            Icons.AutoMirrored.Filled.Undo,
                             contentDescription = "تراجع 2D",
                             tint = if (undoRedo.canUndo) Color.White else Color(0xFF64748B),
                             modifier = Modifier.size(14.dp)
@@ -1425,7 +1427,7 @@ fun Viewport2D(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            Icons.Default.Redo,
+                            Icons.AutoMirrored.Filled.Redo,
                             contentDescription = "إعادة 2D",
                             tint = if (undoRedo.canRedo) Color.White else Color(0xFF64748B),
                             modifier = Modifier.size(14.dp)

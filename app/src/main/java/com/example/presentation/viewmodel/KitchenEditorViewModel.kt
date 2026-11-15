@@ -3019,24 +3019,28 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                     ).jsonContent.take(450000)
                 }
 
-                val primaryMatId = updatedProject.elements.firstOrNull()?.material?.id ?: "oak"
-                val countertopMatId = updatedProject.elements.firstNotNullOfOrNull { it.countertopMaterial?.id } ?: "carrara"
+                fun finiteDouble(valD: Double, fallback: Double): Double =
+                    if (valD.isFinite()) valD else fallback
+
+                val safeTitle = titleToSave.trim().take(190).ifBlank { "مشروع مطبخ ذكي" }
+                val primaryMatId = (updatedProject.elements.firstOrNull()?.material?.id ?: "oak").ifBlank { "oak" }
+                val countertopMatId = (updatedProject.elements.firstNotNullOfOrNull { it.countertopMaterial?.id } ?: "carrara").ifBlank { "carrara" }
 
                 val firestoreDesign = FirestoreKitchenDesign(
                     id = sanitizedDesignId,
                     userId = uid,
-                    title = titleToSave.take(190),
-                    roomWidthCm = (updatedProject.room.widthMm / 10.0).coerceIn(100.0, 5000.0),
-                    roomDepthCm = (updatedProject.room.depthMm / 10.0).coerceIn(100.0, 5000.0),
-                    roomHeightCm = (updatedProject.room.heightMm / 10.0).coerceIn(150.0, 1000.0),
+                    title = safeTitle,
+                    roomWidthCm = finiteDouble(updatedProject.room.widthMm / 10.0, 400.0).coerceIn(100.0, 5000.0),
+                    roomDepthCm = finiteDouble(updatedProject.room.depthMm / 10.0, 350.0).coerceIn(100.0, 5000.0),
+                    roomHeightCm = finiteDouble(updatedProject.room.heightMm / 10.0, 280.0).coerceIn(150.0, 1000.0),
                     elementCount = updatedProject.elements.size.coerceIn(0, 500),
-                    totalCostUsd = costDist.totalCostUsd,
-                    materialsCostUsd = costDist.materialsTotalUsd,
-                    laborCostUsd = costDist.laborCostUsd,
-                    accessoriesCostUsd = costDist.accessoriesCostUsd,
-                    primaryMaterialId = primaryMatId,
-                    countertopMaterialId = countertopMatId,
-                    projectJson = serializedJson
+                    totalCostUsd = finiteDouble(costDist.totalCostUsd, 0.0).coerceIn(0.0, 10000000.0),
+                    materialsCostUsd = finiteDouble(costDist.materialsTotalUsd, 0.0).coerceIn(0.0, 10000000.0),
+                    laborCostUsd = finiteDouble(costDist.laborCostUsd, 0.0).coerceIn(0.0, 10000000.0),
+                    accessoriesCostUsd = finiteDouble(costDist.accessoriesCostUsd, 0.0).coerceIn(0.0, 10000000.0),
+                    primaryMaterialId = primaryMatId.take(100),
+                    countertopMaterialId = countertopMatId.take(100),
+                    projectJson = serializedJson.ifBlank { "{}" }
                 )
 
                 val existing = repo.getKitchenDesign(uid, sanitizedDesignId)
@@ -3064,25 +3068,31 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 }
 
                 // Sync up to 12 kitchen components into /users/{userId}/kitchen_components
-                updatedProject.elements.take(12).forEach { elem ->
-                    val compId = "${sanitizedDesignId}_${elem.id}".replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(110)
-                    val unitCost = costDist.unitCostsByElementId[elem.id]
-                        ?: KitchenCostCalculator.calculateElementPriceUsd(elem)
+                updatedProject.elements.take(12).forEachIndexed { idx, elem ->
+                    val compId = "${sanitizedDesignId}_${elem.id}"
+                        .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+                        .take(110)
+                        .ifBlank { "${sanitizedDesignId}_comp_$idx" }
+                    val unitCost = finiteDouble(
+                        costDist.unitCostsByElementId[elem.id]
+                            ?: KitchenCostCalculator.calculateElementPriceUsd(elem),
+                        0.0
+                    ).coerceIn(0.0, 1000000.0)
                     val compDoc = FirestoreKitchenComponent(
                         id = compId,
                         userId = uid,
                         designId = sanitizedDesignId,
-                        nameAr = elem.name.take(180).ifEmpty { elem.type.title },
-                        category = elem.type.category.name,
-                        typeName = elem.type.name,
-                        widthCm = (elem.dimensions.x / 10.0).coerceIn(10.0, 1000.0),
-                        depthCm = (elem.dimensions.z / 10.0).coerceIn(10.0, 1000.0),
-                        heightCm = (elem.dimensions.y / 10.0).coerceIn(5.0, 600.0),
-                        elevationCm = (elem.position.y / 10.0).coerceIn(0.0, 500.0),
-                        posXCm = (elem.position.x / 10.0).coerceIn(-2000.0, 5000.0),
-                        posYCm = (elem.position.z / 10.0).coerceIn(-2000.0, 5000.0),
-                        rotationDeg = elem.rotationY.toDouble().coerceIn(-360.0, 360.0),
-                        materialId = elem.material.id,
+                        nameAr = elem.name.trim().take(180).ifBlank { elem.type.title.ifBlank { "وحدة مطبخ" } },
+                        category = elem.type.category.name.ifBlank { "BASE_CABINET" },
+                        typeName = elem.type.name.ifBlank { "BASE_SINGLE_DOOR" },
+                        widthCm = finiteDouble(elem.dimensions.x / 10.0, 60.0).coerceIn(10.0, 1000.0),
+                        depthCm = finiteDouble(elem.dimensions.z / 10.0, 60.0).coerceIn(10.0, 1000.0),
+                        heightCm = finiteDouble(elem.dimensions.y / 10.0, 85.0).coerceIn(5.0, 600.0),
+                        elevationCm = finiteDouble(elem.position.y / 10.0, 0.0).coerceIn(0.0, 500.0),
+                        posXCm = finiteDouble(elem.position.x / 10.0, 0.0).coerceIn(-2000.0, 5000.0),
+                        posYCm = finiteDouble(elem.position.z / 10.0, 0.0).coerceIn(-2000.0, 5000.0),
+                        rotationDeg = finiteDouble(elem.rotationY.toDouble(), 0.0).coerceIn(-360.0, 360.0),
+                        materialId = elem.material.id.ifBlank { "oak" }.take(100),
                         unitPriceUsd = unitCost
                     )
                     val existingComp = repo.getKitchenComponent(uid, compId)
