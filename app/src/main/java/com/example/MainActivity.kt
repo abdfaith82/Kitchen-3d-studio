@@ -73,12 +73,16 @@ fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
     awaitClose { auth.removeAuthStateListener(listener) }
 }
 
+/** True when a real Google OAuth web client ID is configured. */
+private fun isWebClientIdConfigured(id: String): Boolean =
+    id.isNotBlank() && id != "not-configured"
+
 suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser?> {
     if (auth.currentUser != null) return Result.success(auth.currentUser)
     // No google-services.json in the repo: the web client ID comes from
-    // BuildConfig (DEFAULT_WEB_CLIENT_ID in .env). Blank = skip silently.
+    // BuildConfig (DEFAULT_WEB_CLIENT_ID in .env). Not configured = skip silently.
     val webClientId = BuildConfig.DEFAULT_WEB_CLIENT_ID
-    if (webClientId.isBlank()) return Result.success(null)
+    if (!isWebClientIdConfigured(webClientId)) return Result.success(null)
     val credentialManager = CredentialManager.create(activityContext)
 
     val googleIdOption = GetGoogleIdOption.Builder()
@@ -118,9 +122,9 @@ suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Res
 
 suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser> {
     // No google-services.json in the repo: the web client ID comes from
-    // BuildConfig (DEFAULT_WEB_CLIENT_ID in .env). Blank = not configured.
+    // BuildConfig (DEFAULT_WEB_CLIENT_ID in .env). Not configured = clear error.
     val webClientId = BuildConfig.DEFAULT_WEB_CLIENT_ID
-    if (webClientId.isBlank()) {
+    if (!isWebClientIdConfigured(webClientId)) {
         return Result.failure(
             IllegalStateException("Google sign-in is not configured: add DEFAULT_WEB_CLIENT_ID to .env")
         )
