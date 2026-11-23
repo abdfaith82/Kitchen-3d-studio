@@ -336,16 +336,13 @@ fun ProjectsManagerDialog(
                                 Spacer(modifier = Modifier.height(10.dp))
 
                                 // Save to Firestore Cloud Button
-                                val isSignedInCloud = !uiState.currentUserUid.isNullOrBlank()
                                 Button(
                                     onClick = {
                                         val title = newProjectName.takeIf { it.isNotBlank() } ?: uiState.project.name
                                         viewModel.saveCurrentDesignToFirestore(title)
                                     },
-                                    enabled = !uiState.isCloudSyncing && isSignedInCloud,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isSignedInCloud) Color(0xFF0284C7) else Color(0xFF334155)
-                                    ),
+                                    enabled = !uiState.isCloudSyncing,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                                     shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -355,13 +352,12 @@ fun ProjectsManagerDialog(
                                     Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = when {
-                                            uiState.isCloudSyncing -> "جاري المزامنة مع Firestore..."
-                                            !isSignedInCloud -> "المزامنة السحابية متاحة عند تسجيل الدخول بحساب Google (الحفظ المحلي متاح 100%)"
-                                            else -> "حفظ التصميم ومكونات المطبخ في Firestore السحابي (${String.format(Locale.US, "$%.0f", uiState.costDistribution.totalCostUsd)})"
-                                        },
+                                        text = if (uiState.isCloudSyncing)
+                                            "جاري المزامنة مع Firestore..."
+                                        else
+                                            "حفظ التصميم ومكونات المطبخ في Firestore السحابي (${String.format(Locale.US, "$%.0f", uiState.costDistribution.totalCostUsd)})",
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp,
+                                        fontSize = 12.sp,
                                         color = Color.White
                                     )
                                 }
@@ -419,10 +415,7 @@ fun ProjectsManagerDialog(
                                                 color = Color.White
                                             )
                                             Text(
-                                                text = if (uiState.currentUserUid.isNullOrBlank())
-                                                    "الوضع المحلي (بدون حساب) • استخدم أزرار Room أعلاه لحفظ واسترجاع مشاريعك"
-                                                else
-                                                    "الحساب: ${uiState.currentUserEmail ?: uiState.currentUserDisplayName ?: "متصل"} • المكونات المحفوظة: ${uiState.cloudComponents.size}",
+                                                text = "الحساب: ${uiState.currentUserEmail ?: uiState.currentUserDisplayName ?: "متصل"} • المكونات المحفوظة: ${uiState.cloudComponents.size}",
                                                 fontSize = 10.sp,
                                                 color = Color(0xFF94A3B8)
                                             )
@@ -432,13 +425,7 @@ fun ProjectsManagerDialog(
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                if (uiState.currentUserUid.isNullOrBlank()) {
-                                    Text(
-                                        text = "أنت تعمل حالياً في الوضع المحلي بدون حساب. يمكنك حفظ كافة مشاريعك وتعديلها محلياً في SQLite Room أو تصديرها JSON/PDF دون أي قيود.",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF94A3B8)
-                                    )
-                                } else if (uiState.cloudDesigns.isEmpty()) {
+                                if (uiState.cloudDesigns.isEmpty()) {
                                     Text(
                                         text = "لا توجد تصاميم محفوظة في حسابك على Firestore بعد. اضغط على 'حفظ التصميم ومكونات المطبخ في Firestore السحابي' أعلاه لحفظ تصميمك الحالي.",
                                         fontSize = 11.sp,

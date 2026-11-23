@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -364,7 +363,7 @@ fun SketchCanvasDialog(
                             enabled = strokes.isNotEmpty(),
                             modifier = Modifier.size(34.dp)
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "تراجع", tint = if (strokes.isNotEmpty()) Color.White else Color.Gray)
+                            Icon(Icons.Default.Undo, contentDescription = "تراجع", tint = if (strokes.isNotEmpty()) Color.White else Color.Gray)
                         }
 
                         // Clear

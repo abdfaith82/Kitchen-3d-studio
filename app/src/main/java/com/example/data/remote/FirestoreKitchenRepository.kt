@@ -136,17 +136,14 @@ data class ProjectCostDistribution(
 )
 
 object KitchenCostCalculator {
-    fun Double.finiteOrDefault(fallback: Double = 0.0): Double =
-        if (isFinite()) this else fallback
-
     /**
      * Automatically calculates the price of a single kitchen component in USD based on its
      * 3D volume/surface area (in mm converted to m²), material finish, and hardware complexity.
      */
     fun calculateUnitPriceForType(type: KitchenElementType): Double {
-        val wCm = (type.defaultDimensions.x / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
-        val hCm = (type.defaultDimensions.y / 10.0).finiteOrDefault(85.0).coerceAtLeast(5.0)
-        val dCm = (type.defaultDimensions.z / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
+        val wCm = type.defaultDimensions.x / 10.0
+        val hCm = type.defaultDimensions.y / 10.0
+        val dCm = type.defaultDimensions.z / 10.0
         val surfaceAreaSqm = (2.0 * (wCm * hCm) + 2.0 * (dCm * hCm) + 2.0 * (wCm * dCm)) / 10000.0
         val baseRatePerSqm = when (type.category) {
             ElementCategory.BASE_CABINET -> 92.0
@@ -155,6 +152,7 @@ object KitchenCostCalculator {
             ElementCategory.TALL_UNIT -> 108.0
             ElementCategory.ISLAND_AND_SURFACE -> 125.0
             ElementCategory.APPLIANCE -> 170.0
+            else -> 55.0
         }
         val bonus = when {
             type.code.contains("drawers") -> 65.0
@@ -162,14 +160,14 @@ object KitchenCostCalculator {
             type.category == ElementCategory.TALL_UNIT -> 95.0
             else -> 25.0
         }
-        val raw = ((surfaceAreaSqm * baseRatePerSqm) + bonus).finiteOrDefault(120.0)
+        val raw = (surfaceAreaSqm * baseRatePerSqm) + bonus
         return ((raw * 10.0).roundToInt() / 10.0).coerceAtLeast(40.0)
     }
 
     fun calculateElementPriceUsd(element: KitchenElement): Double {
-        val wCm = (element.dimensions.x / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
-        val hCm = (element.dimensions.y / 10.0).finiteOrDefault(85.0).coerceAtLeast(5.0)
-        val dCm = (element.dimensions.z / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
+        val wCm = element.dimensions.x / 10.0
+        val hCm = element.dimensions.y / 10.0
+        val dCm = element.dimensions.z / 10.0
         val surfaceAreaSqm = (2.0 * (wCm * hCm) + 2.0 * (dCm * hCm) + 2.0 * (wCm * dCm)) / 10000.0
 
         val baseRatePerSqm = when (element.type.category) {
@@ -179,6 +177,7 @@ object KitchenCostCalculator {
             ElementCategory.TALL_UNIT -> 108.0
             ElementCategory.ISLAND_AND_SURFACE -> 125.0
             ElementCategory.APPLIANCE -> 170.0
+            else -> 55.0
         }
 
         val materialMultiplier = when (element.material.category) {
@@ -206,8 +205,7 @@ object KitchenCostCalculator {
             0.0
         }
 
-        val rawPrice = ((surfaceAreaSqm * baseRatePerSqm * materialMultiplier) + hardwareBonus + countertopBonus)
-            .finiteOrDefault(120.0)
+        val rawPrice = (surfaceAreaSqm * baseRatePerSqm * materialMultiplier) + hardwareBonus + countertopBonus
         return ((rawPrice * 10.0).roundToInt() / 10.0).coerceAtLeast(35.0)
     }
 
@@ -228,33 +226,33 @@ object KitchenCostCalculator {
             val unitPrice = calculateElementPriceUsd(el)
             unitMap[el.id] = unitPrice
 
-            val wCm = (el.dimensions.x / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
-            val dCm = (el.dimensions.z / 10.0).finiteOrDefault(60.0).coerceAtLeast(10.0)
+            val wCm = el.dimensions.x / 10.0
+            val dCm = el.dimensions.z / 10.0
             val cTopCost = if (el.countertopMaterial != null ||
                 el.type.category == ElementCategory.BASE_CABINET ||
                 el.type.category == ElementCategory.ISLAND_AND_SURFACE
             ) {
-                (((wCm * dCm) / 10000.0) * 145.0).finiteOrDefault(0.0)
+                ((wCm * dCm) / 10000.0) * 145.0
             } else {
                 0.0
             }
-            val alumCost = (unitPrice * 0.16).finiteOrDefault(0.0)
-            val boardCost = (unitPrice - cTopCost - alumCost).finiteOrDefault(20.0).coerceAtLeast(20.0)
+            val alumCost = unitPrice * 0.16
+            val boardCost = (unitPrice - cTopCost - alumCost).coerceAtLeast(20.0)
 
             cabinetsAndBoards += boardCost
             countertops += cTopCost
             aluminumAndGlass += alumCost
         }
 
-        val materialsTotal = (cabinetsAndBoards + countertops + aluminumAndGlass).finiteOrDefault(0.0)
-        val safeAccessories = accessoriesCostUsd.finiteOrDefault(0.0).coerceAtLeast(
+        val materialsTotal = cabinetsAndBoards + countertops + aluminumAndGlass
+        val safeAccessories = accessoriesCostUsd.coerceAtLeast(
             project.elements.count {
                 it.type.category != ElementCategory.APPLIANCE
             } * 38.0
         )
         // Workshop fabrication + CNC cutting + on-site installation labor (22% of materials + $45 per unit)
-        val laborCost = ((materialsTotal * 0.22) + (project.elements.size * 45.0)).finiteOrDefault(0.0)
-        val grandTotal = (materialsTotal + safeAccessories + laborCost).finiteOrDefault(0.0)
+        val laborCost = (materialsTotal * 0.22) + (project.elements.size * 45.0)
+        val grandTotal = materialsTotal + safeAccessories + laborCost
 
         return ProjectCostDistribution(
             cabinetsAndBoardsCostUsd = (cabinetsAndBoards * 10.0).roundToInt() / 10.0,

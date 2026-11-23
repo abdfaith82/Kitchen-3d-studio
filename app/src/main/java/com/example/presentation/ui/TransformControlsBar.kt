@@ -10,9 +10,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -103,13 +100,13 @@ fun TransformControlsBar(
                         onClick = { onMove(-activeStepMm, 0f, 0f) },
                         modifier = Modifier.size(26.dp).testTag("quick_nudge_x_neg")
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "يسار X-", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "يسار X-", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = { onMove(activeStepMm, 0f, 0f) },
                         modifier = Modifier.size(26.dp).testTag("quick_nudge_x_pos")
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "يمين X+", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.KeyboardArrowRight, contentDescription = "يمين X+", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = { onMove(0f, 0f, -activeStepMm) },
@@ -176,7 +173,7 @@ fun TransformControlsBar(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     modifier = Modifier.height(28.dp).testTag("rotate_90_button")
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Default.RotateRight, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
                     Text("تدوير 90°", fontSize = 10.sp)
                 }

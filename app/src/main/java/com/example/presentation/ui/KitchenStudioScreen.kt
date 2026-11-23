@@ -6,16 +6,12 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.automirrored.filled.MenuOpen
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.automirrored.filled.ViewSidebar
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,7 +44,6 @@ import kotlin.math.roundToInt
 @Composable
 fun KitchenStudioScreen(
     viewModel: KitchenEditorViewModel,
-    isGuestMode: Boolean = false,
     onSignOut: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -201,9 +196,9 @@ fun KitchenStudioScreen(
                             modifier = Modifier.testTag("top_bar_sign_out_btn")
                         ) {
                             Icon(
-                                imageVector = if (isGuestMode) Icons.AutoMirrored.Filled.Login else Icons.AutoMirrored.Filled.Logout,
-                                contentDescription = if (isGuestMode) "تسجيل الدخول بحساب Google" else "تسجيل الخروج من حساب Google",
-                                tint = if (isGuestMode) Color(0xFF34D399) else Color(0xFFF87171)
+                                Icons.Default.Logout,
+                                contentDescription = "تسجيل الخروج من حساب Google",
+                                tint = Color(0xFFF87171)
                             )
                         }
                     }
@@ -226,7 +221,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("toggle_collapsible_sidebar_btn")
                     ) {
                         Icon(
-                            if (state.isCollapsibleSidebarOpen) Icons.AutoMirrored.Filled.ViewSidebar else Icons.AutoMirrored.Filled.MenuOpen,
+                            if (state.isCollapsibleSidebarOpen) Icons.Default.ViewSidebar else Icons.Default.MenuOpen,
                             contentDescription = "طي/فتح اللوحة الجانبية النحيفة",
                             tint = if (state.isCollapsibleSidebarOpen) Color(0xFF34D399) else Color(0xFF94A3B8)
                         )
@@ -318,7 +313,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("undo_button")
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Undo,
+                            Icons.Default.Undo,
                             contentDescription = "تراجع (Undo)",
                             tint = if (state.undoRedoState.canUndo) Color(0xFF38BDF8) else Color(0xFF475569)
                         )
@@ -331,7 +326,7 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("redo_button")
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Redo,
+                            Icons.Default.Redo,
                             contentDescription = "إعادة (Redo)",
                             tint = if (state.undoRedoState.canRedo) Color(0xFF38BDF8) else Color(0xFF475569)
                         )
@@ -424,12 +419,20 @@ fun KitchenStudioScreen(
                         Icon(Icons.Default.CameraAlt, contentDescription = "استوديو الرندر 4K والإضاءة", tint = Color(0xFFA855F7))
                     }
 
+                    // Cinematic Pro Studio Button (رندر سينمائي + ستايلات عالمية + كاميرا احترافية)
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.CinematicPro) },
+                        modifier = Modifier.testTag("open_cinematic_pro_button")
+                    ) {
+                        Icon(Icons.Default.MovieCreation, contentDescription = "الاستوديو السينمائي الاحترافي والستايلات العالمية", tint = Color(0xFFF472B6))
+                    }
+
                     // Bill of Materials Export Icon
                     IconButton(
                         onClick = { viewModel.openDialog(ActiveDialog.BillOfMaterialsDialog) },
                         modifier = Modifier.testTag("open_bom_button")
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "جدول الكميات BOM", tint = Color(0xFF10B981))
+                        Icon(Icons.Default.ReceiptLong, contentDescription = "جدول الكميات BOM", tint = Color(0xFF10B981))
                     }
 
                     // Quick JSON Files & Elements Export Button
@@ -547,12 +550,6 @@ fun KitchenStudioScreen(
                         label = "استيراد 3D",
                         tag = "btn_open_importer",
                         onClick = { viewModel.openDialog(ActiveDialog.ModelImporterDialog) }
-                    )
-                    BottomStudioAction(
-                        icon = Icons.Default.GridOn,
-                        label = "بناء الغرفة",
-                        tag = "btn_open_room_builder",
-                        onClick = { viewModel.openDialog(ActiveDialog.RoomBuilder) }
                     )
                     BottomStudioAction(
                         icon = Icons.Default.MeetingRoom,
@@ -816,7 +813,7 @@ fun KitchenStudioScreen(
                 }
             }
 
-            // Section 1: Collapsible 3D Cabinet Library Side Panel with Drag-and-Drop into Design Space
+            // Section 1: Collapsible Slim Glassmorphic Sidebar (اللوحة الجانبية النحيفة القابلة للطي بضغطة زر واحدة)
             AnimatedVisibility(
                 visible = state.isCollapsibleSidebarOpen,
                 enter = slideInHorizontally(initialOffsetX = { -it }),
@@ -825,7 +822,7 @@ fun KitchenStudioScreen(
                     .align(Alignment.CenterStart)
                     .padding(start = 8.dp, top = 76.dp, bottom = 76.dp)
             ) {
-                CabinetLibrarySidePanel(
+                CollapsibleSlimGlassSidebar(
                     state = state,
                     onQuickAddElement = { type -> viewModel.addElement(type) },
                     onUpdateSelectedDimensions = { id, newW, newH, newD ->
@@ -847,7 +844,6 @@ fun KitchenStudioScreen(
                         viewModel.toggleSelectedCabinetBackPanel(enabled)
                     },
                     onHideSidebar = { viewModel.toggleCollapsibleSidebar() },
-                    onOpenFullCatalog = { viewModel.openDialog(ActiveDialog.Catalog) },
                     onStartExternalDrag = handleStartExternalDrag,
                     onUpdateExternalDrag = handleUpdateExternalDrag,
                     onEndExternalDrag = handleEndExternalDrag
@@ -1315,6 +1311,13 @@ fun KitchenStudioScreen(
                 onDismiss = { viewModel.openDialog(null) }
             )
         }
+        is ActiveDialog.CinematicPro -> {
+            CinematicProDialog(
+                state = state,
+                viewModel = viewModel,
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
         is ActiveDialog.ExportStudio -> {
             ExportStudioDialog(
                 viewModel = viewModel,
@@ -1409,15 +1412,6 @@ fun KitchenStudioScreen(
                 onDismiss = { viewModel.openDialog(null) }
             )
         }
-        is ActiveDialog.RoomBuilder -> {
-            RoomBuilderScreen(
-                initialRoom = state.project.room,
-                onApplyRoom = { builtRoom ->
-                    viewModel.applyCustomRoom(builtRoom)
-                },
-                onDismiss = { viewModel.openDialog(null) }
-            )
-        }
         null -> {}
     }
 
@@ -1479,6 +1473,277 @@ fun KitchenStudioScreen(
             textContentColor = Color.White,
             titleContentColor = Color.White
         )
+    }
+}
+
+/**
+ * Section 1: Slim Collapsible & Glassmorphic Side Panel (اللوحات الجانبية القابلة للطي + القوائم العائمة الشفافة)
+ * Houses dimension controls, quick cabinet insertion, and instant back-panel 3D hollowing without blocking rear units.
+ */
+@Composable
+private fun CollapsibleSlimGlassSidebar(
+    state: KitchenEditorUiState,
+    onQuickAddElement: (KitchenElementType) -> Unit,
+    onUpdateSelectedDimensions: (String, Float, Float, Float) -> Unit,
+    onToggleBackPanel: (Boolean) -> Unit,
+    onHideSidebar: () -> Unit,
+    onStartExternalDrag: ((KitchenElementType, Offset) -> Unit)? = null,
+    onUpdateExternalDrag: ((Offset) -> Unit)? = null,
+    onEndExternalDrag: (() -> Unit)? = null
+) {
+    val selected = state.singleSelectedElement
+    var sidebarCategoryFilter by remember { mutableStateOf<ElementCategory?>(null) }
+    val allCatalogTypes = remember { KitchenElementType.values().toList() }
+    val displayedTypes = remember(sidebarCategoryFilter) {
+        if (sidebarCategoryFilter == null) allCatalogTypes
+        else allCatalogTypes.filter { it.category == sidebarCategoryFilter }
+    }
+
+    val sidebarCategories: List<Pair<ElementCategory?, String>> = remember {
+        listOf(
+            null to "الكل",
+            ElementCategory.BASE_CABINET to "سفلية",
+            ElementCategory.WALL_CABINET to "علوية",
+            ElementCategory.TALL_UNIT to "أبراج",
+            ElementCategory.APPLIANCE to "أجهزة",
+            ElementCategory.ISLAND_AND_SURFACE to "جزر"
+        )
+    }
+
+    Surface(
+        modifier = Modifier
+            .width(214.dp)
+            .fillMaxHeight()
+            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(16.dp))
+            .testTag("collapsible_slim_sidebar"),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF0F172A).copy(alpha = 0.68f), // Translucent Glassmorphic UI
+        tonalElevation = 6.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "قائمة العناصر والمقاسات",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(
+                    onClick = onHideSidebar,
+                    modifier = Modifier.size(22.dp).testTag("hide_sidebar_inside_btn")
+                ) {
+                    Icon(Icons.Default.ChevronLeft, contentDescription = "إخفاء", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                }
+            }
+
+            HorizontalDivider(color = Color.White.copy(alpha = 0.14f), modifier = Modifier.padding(vertical = 4.dp))
+
+            if (selected != null) {
+                Text(
+                    text = "المحدد: ${selected.name}",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "العرض ${(selected.dimensions.x / 10f).toInt()}×الارتفاع ${(selected.dimensions.y / 10f).toInt()}×العمق ${(selected.dimensions.z / 10f).toInt()} سم",
+                    color = Color.White,
+                    fontSize = 10.sp
+                )
+                Text(
+                    text = if (selected.type.category == ElementCategory.WALL_CABINET)
+                        "ارتفاع القاع: ${(selected.position.y / 10f).toInt()} سم (سفلية + 60سم)"
+                    else "الارتفاع Y: ${(selected.position.y / 10f).toInt()} سم",
+                    color = Color(0xFF34D399),
+                    fontSize = 9.sp
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("ظهر الخزانة 3D:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
+                    Switch(
+                        checked = selected.hasBackPanel,
+                        onCheckedChange = { onToggleBackPanel(it) },
+                        modifier = Modifier.testTag("sidebar_back_panel_switch")
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            onUpdateSelectedDimensions(
+                                selected.id,
+                                selected.dimensions.x,
+                                (selected.dimensions.y + 50f).coerceAtMost(2400f),
+                                selected.dimensions.z
+                            )
+                        },
+                        contentPadding = PaddingValues(2.dp),
+                        modifier = Modifier.weight(1f).height(26.dp).testTag("sidebar_increase_height_btn")
+                    ) {
+                        Text("+ارتفاع 5سم", fontSize = 9.sp)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            onUpdateSelectedDimensions(
+                                selected.id,
+                                (selected.dimensions.x + 50f).coerceAtMost(1800f),
+                                selected.dimensions.y,
+                                selected.dimensions.z
+                            )
+                        },
+                        contentPadding = PaddingValues(2.dp),
+                        modifier = Modifier.weight(1f).height(26.dp)
+                    ) {
+                        Text("+عرض 5سم", fontSize = 9.sp)
+                    }
+                }
+                HorizontalDivider(color = Color.White.copy(alpha = 0.14f), modifier = Modifier.padding(vertical = 4.dp))
+            }
+
+            Text(
+                text = "اسحب العنصر للمخطط أو اضغط للإدراج:",
+                color = Color(0xFFFBBF24),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Category Filter Chips inside Sidebar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                sidebarCategories.forEach { (cat, label) ->
+                    val isSelectedCat = sidebarCategoryFilter == cat
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isSelectedCat) Color(0xFF0284C7) else Color(0xFF1E293B),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSelectedCat) Color(0xFF38BDF8) else Color(0xFF334155)
+                        ),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { sidebarCategoryFilter = cat }
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelectedCat) Color.White else Color(0xFFCBD5E1),
+                            fontSize = 9.sp,
+                            fontWeight = if (isSelectedCat) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(displayedTypes, key = { it.code }) { type ->
+                    var itemRootPos by remember { mutableStateOf(Offset.Zero) }
+                    var activeFingerRoot by remember { mutableStateOf(Offset.Zero) }
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF1E293B).copy(alpha = 0.75f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coords ->
+                                itemRootPos = coords.positionInRoot()
+                            }
+                            .clickable { onQuickAddElement(type) }
+                            .pointerInput(type) {
+                                detectDragGestures(
+                                    onDragStart = { startOffset ->
+                                        activeFingerRoot = itemRootPos + startOffset
+                                        onStartExternalDrag?.invoke(type, activeFingerRoot)
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        activeFingerRoot += dragAmount
+                                        onUpdateExternalDrag?.invoke(activeFingerRoot)
+                                    },
+                                    onDragEnd = {
+                                        onEndExternalDrag?.invoke()
+                                    },
+                                    onDragCancel = {
+                                        onEndExternalDrag?.invoke()
+                                    }
+                                )
+                            }
+                            .testTag("sidebar_visual_item_${type.code}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Visual 3D Isometric + Elevation Shape of the Element
+                            CabinetPreviewThumbnail(
+                                type = type,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF0F172A))
+                            )
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = type.title,
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 12.sp
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${(type.defaultDimensions.x / 10f).toInt()}×${(type.defaultDimensions.z / 10f).toInt()}سم",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "اسحب ✥",
+                                        color = Color(0xFFF59E0B),
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

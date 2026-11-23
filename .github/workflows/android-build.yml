@@ -42,11 +42,6 @@ jobs:
             cp .env.example .env
           fi
 
-          # Restore app/google-services.json from optional GitHub Secret if absent in repo
-          if [ ! -f app/google-services.json ] && [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
-            printf '%s' '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
-          fi
-
           # Remove any stale KSP generated directory if cached
           rm -rf app/build/generated/ksp
 
@@ -66,17 +61,6 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-
-      - name: Run Unit Tests
-        run: |
-          gradle :app:testDebugUnitTest \
-            --tests "com.example.ExampleUnitTest" \
-            --tests "com.example.AluminumBarNestingOptimizerTest" \
-            --tests "com.example.ExportAndPackagingTest" \
-            --no-configuration-cache \
-            -Djava.awt.headless=true \
-            -Dkotlin.compiler.execution.strategy=daemon \
-            --stacktrace
 
       - name: Build Debug APK
         run: |

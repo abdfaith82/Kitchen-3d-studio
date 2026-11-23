@@ -1,83 +1,49 @@
 package com.example.core.command
 
-import com.example.core.geometry.CollisionDetector
-import com.example.core.geometry.OrientedBoundingBox
-import com.example.core.geometry.Vector3
+import com.example.core.math.Vector3
+import kotlin.math.roundToInt
 
+/**
+ * Command encapsulating 2D/3D Position, Rotation (Yaw), and Dimensions/Scale transformations
+ * with 1mm precision.
+ */
 class TransformCommand(
-    private val targetEntity: CabinetEntityModel,
-    private val oldPosition: Vector3,
-    private val oldRotationY: Float,
-    private val newPosition: Vector3,
-    private val newRotationY: Float,
-    private val allEntities: List<CabinetEntityModel>,
-    private val preventCollisions: Boolean = true,
-    private val onTransformApplied: (CabinetEntityModel) -> Unit
-) : EditorCommand {
+    val elementId: String,
+    val oldPosition: Vector3,
+    val newPosition: Vector3,
+    val oldRotationY: Float,
+    val newRotationY: Float,
+    val oldDimensions: Vector3,
+    val newDimensions: Vector3,
+    private val applyTransform: (elementId: String, pos: Vector3, rot: Float, dims: Vector3) -> Unit,
+    val elementName: String = ""
+) : Command {
 
-    override val description: String = "تحريك / تدوير وحدة ${targetEntity.name}"
+    private val displayLabel: String = elementName.ifBlank { "العنصر" }
 
-    override fun execute(): Boolean {
-        if (targetEntity.isLocked) return false
+    override val category: CommandCategory = CommandCategory.FLOORPLAN_TRANSFORM
 
-        if (preventCollisions) {
-            val tentativeOBB = OrientedBoundingBox(
-                center = Vector3(newPosition.x, newPosition.y + targetEntity.height * 0.5f, newPosition.z),
-                halfExtents = Vector3(targetEntity.width * 0.5f, targetEntity.height * 0.5f, targetEntity.depth * 0.5f),
-                rotationYDegrees = newRotationY
-            )
+    override val title: String = when {
+        oldDimensions != newDimensions -> "تغيير مقاس $displayLabel"
+        oldRotationY != newRotationY && oldPosition == newPosition -> "تدوير $displayLabel (${newRotationY.roundToInt()}°)"
+        else -> "تحريك $displayLabel"
+    }
 
-            for (other in allEntities) {
-                if (other.id == targetEntity.id) continue
-                val otherOBB = other.toOBB()
-                val collision = CollisionDetector.testOBBOBB(tentativeOBB, otherOBB)
-                if (collision.hasCollision && collision.overlapDepth > 0.015f) {
-                    return false
-                }
-            }
+    override val description: String = buildString {
+        append("X:${newPosition.x.roundToInt()} Z:${newPosition.z.roundToInt()} مم")
+        if (oldRotationY != newRotationY) {
+            append(" | زاوية: ${oldRotationY.roundToInt()}°←${newRotationY.roundToInt()}°")
         }
-
-        targetEntity.position = newPosition
-        targetEntity.rotationY = newRotationY
-        onTransformApplied(targetEntity)
-        return true
+        if (oldDimensions != newDimensions) {
+            append(" | ${newDimensions.x.roundToInt()}×${newDimensions.z.roundToInt()} مم")
+        }
     }
 
-    override fun undo(): Boolean {
-        targetEntity.position = oldPosition
-        targetEntity.rotationY = oldRotationY
-        onTransformApplied(targetEntity)
-        return true
-    }
-}
-
-class ResizeCabinetCommand(
-    private val targetEntity: CabinetEntityModel,
-    private val oldWidth: Float,
-    private val oldHeight: Float,
-    private val oldDepth: Float,
-    private val newWidth: Float,
-    private val newHeight: Float,
-    private val newDepth: Float,
-    private val onResized: (CabinetEntityModel) -> Unit
-) : EditorCommand {
-
-    override val description: String = "تعديل أبعاد وحدة ${targetEntity.name}"
-
-    override fun execute(): Boolean {
-        if (targetEntity.isLocked) return false
-        targetEntity.width = newWidth
-        targetEntity.height = newHeight
-        targetEntity.depth = newDepth
-        onResized(targetEntity)
-        return true
+    override fun execute() {
+        applyTransform(elementId, newPosition, newRotationY, newDimensions)
     }
 
-    override fun undo(): Boolean {
-        targetEntity.width = oldWidth
-        targetEntity.height = oldHeight
-        targetEntity.depth = oldDepth
-        onResized(targetEntity)
-        return true
+    override fun undo() {
+        applyTransform(elementId, oldPosition, oldRotationY, oldDimensions)
     }
 }

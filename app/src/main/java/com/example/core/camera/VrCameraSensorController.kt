@@ -335,12 +335,11 @@ fun VrCameraSensorNavigationOverlay(
                         currentOnWalkStep(0.26f * currentSensitivity, 0f)
                     }
                     Sensor.TYPE_LINEAR_ACCELERATION -> {
-                        if (event.values.size < 3) return
                         if (lastAccelTimestampNs != 0L) {
                             val dt = (event.timestamp - lastAccelTimestampNs) * 1e-9f
                             if (dt in 0.005f..0.2f) {
                                 val az = -event.values[2] // Forward axis along phone camera optical axis
-                                if (az.isFinite() && abs(az) > 0.45f) {
+                                if (abs(az) > 0.45f) {
                                     forwardMomentum = (forwardMomentum * 0.8f + az * dt * 0.09f).coerceIn(-0.08f, 0.12f)
                                     if (abs(forwardMomentum) > 0.01f) {
                                         currentOnWalkStep(forwardMomentum * currentSensitivity, 0f)
@@ -370,26 +369,11 @@ fun VrCameraSensorNavigationOverlay(
         }
     }
 
-    // CameraX ImageAnalysis Executor & Bound Provider reference for leak-free unbinding
+    // CameraX ImageAnalysis Executor
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-    var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    var isCameraDisposed by remember { mutableStateOf(false) }
-
-    DisposableEffect(enabled, isPipMinimized, hasCameraPermission) {
-        isCameraDisposed = false
-        onDispose {
-            isCameraDisposed = true
-            runCatching { boundCameraProvider?.unbindAll() }
-            boundCameraProvider = null
-        }
-    }
-
     DisposableEffect(Unit) {
         onDispose {
-            isCameraDisposed = true
-            runCatching { boundCameraProvider?.unbindAll() }
-            boundCameraProvider = null
-            analysisExecutor.shutdownNow()
+            analysisExecutor.shutdown()
         }
     }
 
@@ -514,10 +498,8 @@ fun VrCameraSensorNavigationOverlay(
 
                             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                             cameraProviderFuture.addListener({
-                                if (isCameraDisposed || analysisExecutor.isShutdown) return@addListener
                                 runCatching {
                                     val cameraProvider = cameraProviderFuture.get()
-                                    boundCameraProvider = cameraProvider
                                     val preview = Preview.Builder().build().also {
                                         it.setSurfaceProvider(previewView.surfaceProvider)
                                     }
@@ -533,7 +515,6 @@ fun VrCameraSensorNavigationOverlay(
                                         .also { analysis ->
                                             analysis.setAnalyzer(analysisExecutor) { imageProxy ->
                                                 try {
-                                                    if (isCameraDisposed || analysisExecutor.isShutdown) return@setAnalyzer
                                                     VrCameraOpticalFlowEngine.extractLuminanceGrid(imageProxy, currGrid)
                                                     val nowMs = System.currentTimeMillis()
                                                     val dtMs = (nowMs - lastFrameTimeMs).coerceAtLeast(1L)
@@ -556,23 +537,20 @@ fun VrCameraSensorNavigationOverlay(
                                                         smoothTilt = smoothTilt * 0.55f + flow.tiltDeltaDeg * 0.45f
                                                         smoothWalk = smoothWalk * 0.60f + flow.walkForwardDeltaM * 0.40f
 
-                                                        if (!isCameraDisposed) {
-                                                            previewView.post {
-                                                                if (isCameraDisposed) return@post
-                                                                telemetry = flow
-                                                                when (currentSubMode) {
-                                                                    VrCameraNavSubMode.FULL_OPTICAL_PAN_TILT_WALK -> {
-                                                                        if (abs(smoothPan) > 0.05f || abs(smoothTilt) > 0.05f) {
-                                                                            currentOnLookDelta(smoothPan, smoothTilt)
-                                                                        }
-                                                                        if (abs(smoothWalk) > 0.006f) {
-                                                                            currentOnWalkStep(smoothWalk, 0f)
-                                                                        }
+                                                        previewView.post {
+                                                            telemetry = flow
+                                                            when (currentSubMode) {
+                                                                VrCameraNavSubMode.FULL_OPTICAL_PAN_TILT_WALK -> {
+                                                                    if (abs(smoothPan) > 0.05f || abs(smoothTilt) > 0.05f) {
+                                                                        currentOnLookDelta(smoothPan, smoothTilt)
                                                                     }
-                                                                    VrCameraNavSubMode.OPTICAL_WALK_PLUS_GYRO_LOOK -> {
-                                                                        if (abs(smoothWalk) > 0.005f || abs(flow.strafeDeltaM) > 0.005f) {
-                                                                            currentOnWalkStep(smoothWalk, flow.strafeDeltaM)
-                                                                        }
+                                                                    if (abs(smoothWalk) > 0.006f) {
+                                                                        currentOnWalkStep(smoothWalk, 0f)
+                                                                    }
+                                                                }
+                                                                VrCameraNavSubMode.OPTICAL_WALK_PLUS_GYRO_LOOK -> {
+                                                                    if (abs(smoothWalk) > 0.005f || abs(flow.strafeDeltaM) > 0.005f) {
+                                                                        currentOnWalkStep(smoothWalk, flow.strafeDeltaM)
                                                                     }
                                                                 }
                                                             }

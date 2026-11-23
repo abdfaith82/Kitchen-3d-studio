@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
-import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -66,7 +64,7 @@ fun CameraNavigationOverlay(
         ) {
             PresetChip(
                 label = "مدار 3D",
-                icon = Icons.AutoMirrored.Filled.RotateRight,
+                icon = Icons.Default.RotateRight,
                 isSelected = state.cameraMode == CameraMode.ORBIT && state.activeCameraPreset == null,
                 onClick = { onPresetSelected(CameraNavigationPreset.PERSPECTIVE) },
                 tag = "preset_orbit"
@@ -74,7 +72,7 @@ fun CameraNavigationOverlay(
 
             PresetChip(
                 label = "مشي 160سم",
-                icon = Icons.AutoMirrored.Filled.DirectionsWalk,
+                icon = Icons.Default.DirectionsWalk,
                 isSelected = state.cameraMode == CameraMode.FIRST_PERSON_WALK,
                 badgeColor = Color(0xFF10B981),
                 onClick = { onPresetSelected(CameraNavigationPreset.FIRST_PERSON) },

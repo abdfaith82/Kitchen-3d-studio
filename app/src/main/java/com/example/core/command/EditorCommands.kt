@@ -1,142 +1,192 @@
 package com.example.core.command
 
-import com.example.core.geometry.Vector3
-import com.example.core.geometry.OrientedBoundingBox
+import com.example.domain.model.KitchenElement
+import com.example.domain.model.KitchenGroup
+import com.example.domain.model.RoomStructure
+import com.example.domain.model.Wall
+import kotlin.math.roundToInt
 
-interface EditorCommand {
-    val description: String
-    fun execute(): Boolean
-    fun undo(): Boolean
-    fun redo(): Boolean = execute()
-}
+/**
+ * Command for adding a kitchen element from the catalog or quick toolbar.
+ */
+class AddElementCommand(
+    val element: KitchenElement,
+    private val onAdd: (KitchenElement) -> Unit,
+    private val onRemove: (String) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.FURNITURE_PLACEMENT
+    override val title: String = "إضافة ${element.name}"
+    override val description: String =
+        "الموقع: (${element.position.x.roundToInt()}, ${element.position.z.roundToInt()}) مم"
 
-data class CabinetEntityModel(
-    val id: String,
-    val name: String,
-    val modelAssetPath: String,
-    var position: Vector3,
-    var rotationY: Float = 0f,
-    var width: Float = 0.60f,
-    var height: Float = 0.82f,
-    var depth: Float = 0.60f,
-    var materialId: String = "wood_oak_natural",
-    val isLocked: Boolean = false
-) {
-    fun toOBB(): OrientedBoundingBox {
-        return OrientedBoundingBox(
-            center = Vector3(position.x, position.y + height * 0.5f, position.z),
-            halfExtents = Vector3(width * 0.5f, height * 0.5f, depth * 0.5f),
-            rotationYDegrees = rotationY
-        )
+    override fun execute() {
+        onAdd(element)
     }
 
-    fun copyEntity(): CabinetEntityModel {
-        return copy(
-            position = position.copy(),
-            rotationY = rotationY,
-            width = width,
-            height = height,
-            depth = depth
-        )
+    override fun undo() {
+        onRemove(element.id)
     }
 }
 
-class CommandManager(private val maxHistorySize: Int = 50) {
-    private val undoStack = ArrayDeque<EditorCommand>()
-    private val redoStack = ArrayDeque<EditorCommand>()
+/**
+ * Dedicated command for placing a furniture element directly onto the 2D Floor Plan canvas
+ * at a 1mm-snapped coordinate, preserving and restoring the prior selection state on undo.
+ */
+class PlaceFurniture2DCommand(
+    val element: KitchenElement,
+    val previousSelectedIds: Set<String> = emptySet(),
+    private val onPlace: (KitchenElement) -> Unit,
+    private val onRevertPlacement: (elementId: String, previousSelection: Set<String>) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.FURNITURE_PLACEMENT
+    override val title: String = "وضع ${element.name} بالمخطط 2D"
+    override val description: String =
+        "X:${element.position.x.roundToInt()} مم، Z:${element.position.z.roundToInt()} مم (${element.dimensions.x.roundToInt()}×${element.dimensions.z.roundToInt()} مم)"
 
-    val canUndo: Boolean get() = undoStack.isNotEmpty()
-    val canRedo: Boolean get() = redoStack.isNotEmpty()
-
-    fun executeCommand(command: EditorCommand): Boolean {
-        val success = command.execute()
-        if (success) {
-            undoStack.addLast(command)
-            redoStack.clear()
-            if (undoStack.size > maxHistorySize) {
-                undoStack.removeFirst()
-            }
-        }
-        return success
+    override fun execute() {
+        onPlace(element)
     }
 
-    fun undo(): Boolean {
-        if (!canUndo) return false
-        val cmd = undoStack.removeLast()
-        val success = cmd.undo()
-        if (success) {
-            redoStack.addLast(cmd)
-        } else {
-            undoStack.addLast(cmd)
-        }
-        return success
-    }
-
-    fun redo(): Boolean {
-        if (!canRedo) return false
-        val cmd = redoStack.removeLast()
-        val success = cmd.redo()
-        if (success) {
-            undoStack.addLast(cmd)
-        } else {
-            redoStack.addLast(cmd)
-        }
-        return success
-    }
-
-    fun clear() {
-        undoStack.clear()
-        redoStack.clear()
+    override fun undo() {
+        onRevertPlacement(element.id, previousSelectedIds)
     }
 }
 
-class AddCabinetCommand(
-    private val sceneEntities: MutableList<CabinetEntityModel>,
-    private val entityToAdd: CabinetEntityModel,
-    private val onSceneUpdated: (List<CabinetEntityModel>) -> Unit
-) : EditorCommand {
-    override val description: String = "إضافة وحدة: ${entityToAdd.name}"
-
-    override fun execute(): Boolean {
-        sceneEntities.add(entityToAdd)
-        onSceneUpdated(sceneEntities.toList())
-        return true
+/**
+ * Command for deleting one or more elements and restoring them to their exact 1mm positions on undo.
+ */
+class DeleteElementsCommand(
+    val elements: List<KitchenElement>,
+    private val onRestore: (List<KitchenElement>) -> Unit,
+    private val onDelete: (List<String>) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.ELEMENT_DELETION
+    override val title: String = if (elements.size == 1) {
+        "حذف ${elements.first().name}"
+    } else {
+        "حذف عناصر (${elements.size})"
+    }
+    override val description: String = elements.joinToString("، ") {
+        "${it.name} (${it.position.x.roundToInt()},${it.position.z.roundToInt()} مم)"
     }
 
-    override fun undo(): Boolean {
-        val removed = sceneEntities.removeAll { it.id == entityToAdd.id }
-        if (removed) {
-            onSceneUpdated(sceneEntities.toList())
-        }
-        return removed
+    override fun execute() {
+        onDelete(elements.map { it.id })
+    }
+
+    override fun undo() {
+        onRestore(elements)
     }
 }
 
-class RemoveCabinetCommand(
-    private val sceneEntities: MutableList<CabinetEntityModel>,
-    private val entityToRemove: CabinetEntityModel,
-    private val onSceneUpdated: (List<CabinetEntityModel>) -> Unit
-) : EditorCommand {
-    private var removedIndex: Int = -1
-    override val description: String = "حذف وحدة: ${entityToRemove.name}"
+/**
+ * Command for grouping multiple selected elements.
+ */
+class GroupElementsCommand(
+    val group: KitchenGroup,
+    private val onGroup: (KitchenGroup) -> Unit,
+    private val onUngroup: (String) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.GROUPING
+    override val title: String = "تجميع عناصر (${group.name})"
+    override val description: String = "دمج ${group.elementIds.size} عناصر في مجموعة واحدة"
 
-    override fun execute(): Boolean {
-        removedIndex = sceneEntities.indexOfFirst { it.id == entityToRemove.id }
-        if (removedIndex >= 0) {
-            sceneEntities.removeAt(removedIndex)
-            onSceneUpdated(sceneEntities.toList())
-            return true
-        }
-        return false
+    override fun execute() {
+        onGroup(group)
     }
 
-    override fun undo(): Boolean {
-        if (removedIndex in 0..sceneEntities.size) {
-            sceneEntities.add(removedIndex, entityToRemove)
-        } else {
-            sceneEntities.add(entityToRemove)
-        }
-        onSceneUpdated(sceneEntities.toList())
-        return true
+    override fun undo() {
+        onUngroup(group.id)
+    }
+}
+
+/**
+ * Command for ungrouping an existing group and restoring the group on undo.
+ */
+class UngroupElementsCommand(
+    val groups: List<KitchenGroup>,
+    private val onUngroupAll: (List<String>) -> Unit,
+    private val onRestoreGroups: (List<KitchenGroup>) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.GROUPING
+    override val title: String = "فك تجميع (${groups.size})"
+    override val description: String = groups.joinToString("، ") { it.name }
+
+    override fun execute() {
+        onUngroupAll(groups.map { it.id })
+    }
+
+    override fun undo() {
+        onRestoreGroups(groups)
+    }
+}
+
+/**
+ * Command for modifying a single wall (openings, doors, windows, MEP utility points).
+ */
+class ModifyWallCommand(
+    val oldWall: Wall,
+    val newWall: Wall,
+    private val onApply: (Wall) -> Unit,
+    customTitle: String? = null,
+    customDescription: String? = null
+) : Command {
+    override val category: CommandCategory = CommandCategory.LAYOUT_MODIFICATION
+    override val title: String = customTitle ?: "تعديل جدار (${newWall.side.title})"
+    override val description: String = customDescription
+        ?: "فتحات: ${newWall.openings.size} | خدمات: ${newWall.utilityPoints.size} | طول: ${newWall.lengthMm.roundToInt()} مم"
+
+    override fun execute() {
+        onApply(newWall)
+    }
+
+    override fun undo() {
+        onApply(oldWall)
+    }
+}
+
+/**
+ * Command encapsulating room structure & 2D floor plan layout modifications
+ * (room dimensions, L-Shape / U-Shape / Rectangular layout shape, wall lengths, corner angles, wall thickness).
+ */
+class ModifyRoomLayoutCommand(
+    val oldRoom: RoomStructure,
+    val newRoom: RoomStructure,
+    override val title: String = "تعديل تخطيط الغرفة 2D",
+    override val description: String = "${newRoom.widthMm.roundToInt()}×${newRoom.depthMm.roundToInt()} مم (${newRoom.layoutShape.titleAr})",
+    private val onApplyRoom: (RoomStructure) -> Unit
+) : Command {
+    override val category: CommandCategory = CommandCategory.LAYOUT_MODIFICATION
+
+    override fun execute() {
+        onApplyRoom(newRoom)
+    }
+
+    override fun undo() {
+        onApplyRoom(oldRoom)
+    }
+}
+
+/**
+ * Command encapsulating multi-element 2D floor plan layout modifications
+ * (e.g., multi-element 2D drag/nudge, ergonomic layout auto-fix, material/countertop batch updates).
+ */
+class BatchFloorPlanLayoutCommand(
+    val beforeElements: List<KitchenElement>,
+    val afterElements: List<KitchenElement>,
+    val beforeSelection: Set<String> = emptySet(),
+    val afterSelection: Set<String> = emptySet(),
+    override val title: String,
+    override val description: String,
+    override val category: CommandCategory = CommandCategory.FLOORPLAN_TRANSFORM,
+    private val onApplyElements: (elements: List<KitchenElement>, selectedIds: Set<String>) -> Unit
+) : Command {
+
+    override fun execute() {
+        onApplyElements(afterElements, afterSelection)
+    }
+
+    override fun undo() {
+        onApplyElements(beforeElements, beforeSelection)
     }
 }

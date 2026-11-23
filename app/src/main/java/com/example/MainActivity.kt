@@ -1,6 +1,5 @@
 package com.example
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -57,13 +56,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
-fun Context.findActivityOrNull(): Activity? {
+fun Context.findActivity(): Activity {
     var context = this
     while (context is ContextWrapper) {
         if (context is Activity) return context
         context = context.baseContext
     }
-    return null
+    throw IllegalStateException("Credentials must be requested from an Activity context.")
 }
 
 fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
@@ -74,49 +73,22 @@ fun observeAuthState(auth: FirebaseAuth): Flow<FirebaseUser?> = callbackFlow {
     awaitClose { auth.removeAuthStateListener(listener) }
 }
 
-private const val GOOGLE_WEB_CLIENT_ID_FALLBACK =
-    "52319811209-14vjtdf5s2av8u7nuno9mhv71313u01i.apps.googleusercontent.com"
-
-@SuppressLint("DiscouragedApi")
-fun resolveDefaultWebClientId(context: Context): String {
-    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-    if (resId != 0) {
-        val value = runCatching { context.getString(resId) }.getOrDefault("").trim()
-        if (value.isNotEmpty() && !value.startsWith("REPLACE_WITH")) return value
-    }
-    return GOOGLE_WEB_CLIENT_ID_FALLBACK
-}
-
-fun ensureFirebaseAuth(context: Context): FirebaseAuth? {
-    return try {
-        val appContext = context.applicationContext
-        if (com.google.firebase.FirebaseApp.getApps(appContext).isEmpty()) {
-            com.google.firebase.FirebaseApp.initializeApp(appContext)
-        }
-        FirebaseAuth.getInstance()
-    } catch (e: Exception) {
-        Log.w("Auth", "FirebaseAuth unavailable: ${e.message}")
-        null
-    }
-}
-
 suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser?> {
     if (auth.currentUser != null) return Result.success(auth.currentUser)
+    val credentialManager = CredentialManager.create(activityContext)
+    val webClientId = activityContext.getString(R.string.default_web_client_id)
+
+    val googleIdOption = GetGoogleIdOption.Builder()
+        .setServerClientId(webClientId)
+        .setFilterByAuthorizedAccounts(true)
+        .setAutoSelectEnabled(true)
+        .build()
+
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(googleIdOption)
+        .build()
+
     return try {
-        val credentialManager = CredentialManager.create(activityContext)
-        val webClientId = resolveDefaultWebClientId(activityContext)
-        if (webClientId.isBlank()) return Result.success(null)
-
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setServerClientId(webClientId)
-            .setFilterByAuthorizedAccounts(true)
-            .setAutoSelectEnabled(true)
-            .build()
-
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
-            .build()
-
         val result = credentialManager.getCredential(activityContext, request)
         val credential = result.credential
         if (credential is CustomCredential &&
@@ -142,18 +114,15 @@ suspend fun attemptAutoSignIn(activityContext: Context, auth: FirebaseAuth): Res
 }
 
 suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth): Result<FirebaseUser> {
+    val credentialManager = CredentialManager.create(activityContext)
+    val webClientId = activityContext.getString(R.string.default_web_client_id)
+
+    val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(signInWithGoogleOption)
+        .build()
+
     return try {
-        val credentialManager = CredentialManager.create(activityContext)
-        val webClientId = resolveDefaultWebClientId(activityContext)
-        if (webClientId.isBlank()) {
-            return Result.failure(IllegalStateException("معرّف عميل Google غير مهيأ — يرجى التحقق من إعدادات التطبيق"))
-        }
-
-        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInWithGoogleOption)
-            .build()
-
         val result = credentialManager.getCredential(activityContext, request)
         val credential = result.credential
         if (credential is CustomCredential &&
@@ -162,9 +131,7 @@ suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth)
             val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
             val firebaseCredential = GoogleAuthProvider.getCredential(googleIdTokenCredential.idToken, null)
             val authResult = auth.signInWithCredential(firebaseCredential).await()
-            val signedInUser = authResult.user
-                ?: return Result.failure(IllegalStateException("تعذر استرداد بيانات المستخدم من Firebase"))
-            Result.success(signedInUser)
+            Result.success(authResult.user!!)
         } else {
             Result.failure(IllegalStateException("نوع بيانات اعتماد غير مدعوم"))
         }
@@ -210,8 +177,13 @@ class MainActivity : ComponentActivity() {
 fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var auth by remember { mutableStateOf(ensureFirebaseAuth(context)) }
-    var isOfflineGuestMode by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val auth = remember {
+        try {
+            FirebaseAuth.getInstance()
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     val currentUser by remember(auth) {
         auth?.let { observeAuthState(it) } ?: kotlinx.coroutines.flow.flowOf(null)
@@ -222,11 +194,9 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     var isSigningIn by remember { mutableStateOf(false) }
 
     LaunchedEffect(auth) {
-        val activeAuth = auth ?: ensureFirebaseAuth(context).also { auth = it }
-        val activity = context.findActivityOrNull()
-        if (activeAuth != null && activeAuth.currentUser == null && activity != null) {
+        if (auth != null && auth.currentUser == null) {
             try {
-                attemptAutoSignIn(activity, activeAuth)
+                attemptAutoSignIn(context.findActivity(), auth)
             } catch (_: Exception) {
             } finally {
                 isCheckingSilentAuth = false
@@ -237,9 +207,6 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     }
 
     LaunchedEffect(currentUser?.uid) {
-        if (currentUser != null) {
-            isOfflineGuestMode = false
-        }
         viewModel.bindAuthenticatedUser(
             uid = currentUser?.uid,
             displayName = currentUser?.displayName,
@@ -248,18 +215,13 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     }
 
     val user = currentUser
-    if (user != null || isOfflineGuestMode) {
-        key(user?.uid ?: "guest_offline_studio") {
+    if (user != null) {
+        key(user.uid) {
             KitchenStudioScreen(
                 viewModel = viewModel,
-                isGuestMode = (user == null),
                 onSignOut = {
-                    if (user != null) {
-                        scope.launch {
-                            auth?.let { signOutUser(context, it) }
-                        }
-                    } else {
-                        isOfflineGuestMode = false
+                    scope.launch {
+                        auth?.let { signOutUser(context, it) }
                     }
                 }
             )
@@ -267,35 +229,20 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     } else {
         GoogleAuthGateScreen(
             isLoading = isCheckingSilentAuth || isSigningIn,
-            isFirebaseAvailable = auth != null,
             errorMessage = authErrorMessage,
             onSignInClick = {
-                val activeAuth = auth ?: ensureFirebaseAuth(context).also { auth = it }
-                if (activeAuth == null) {
-                    authErrorMessage = "تعذر تهيئة خدمة المصادقة السحابية في هذا الإصدار؛ يمكنك المتابعة مباشرة عبر \"الدخول بدون حساب (الوضع المحلي)\" بكامل أدوات التصميم 3D و CAD."
-                    return@GoogleAuthGateScreen
-                }
-                val activity = context.findActivityOrNull()
-                if (activity == null) {
-                    authErrorMessage = "تعذر تحديد نافذة النشاط الحالية لتسجيل الدخول."
-                    return@GoogleAuthGateScreen
-                }
+                if (auth == null) return@GoogleAuthGateScreen
                 scope.launch {
                     isSigningIn = true
                     authErrorMessage = null
-                    val res = signInWithGoogleButton(activity, activeAuth)
+                    val res = signInWithGoogleButton(context.findActivity(), auth)
                     isSigningIn = false
                     res.onFailure { err ->
                         if (err !is GetCredentialCancellationException) {
-                            authErrorMessage = err.localizedMessage
-                                ?: "تعذر تسجيل الدخول عبر Google. يمكنك تجربة الدخول بدون حساب أو التحقق من الاتصال."
+                            authErrorMessage = err.localizedMessage ?: "تعذر تسجيل الدخول عبر Google، يرجى المحاولة مرة أخرى."
                         }
                     }
                 }
-            },
-            onContinueWithoutAccount = {
-                authErrorMessage = null
-                isOfflineGuestMode = true
             }
         )
     }
@@ -304,10 +251,8 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
 @Composable
 fun GoogleAuthGateScreen(
     isLoading: Boolean,
-    isFirebaseAvailable: Boolean = true,
     errorMessage: String?,
-    onSignInClick: () -> Unit,
-    onContinueWithoutAccount: () -> Unit = {}
+    onSignInClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -398,24 +343,6 @@ fun GoogleAuthGateScreen(
                     )
                 }
 
-                if (!isFirebaseAvailable && errorMessage == null) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF78350F).copy(alpha = 0.4f),
-                        border = BorderStroke(1.dp, Color(0xFFF59E0B)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "تنبيه: المزامنة السحابية غير مفعلة في هذه الحزمة أو بدون اتصال — يمكنك الدخول فوراً في الوضع المحلي بدون حساب واستخدام كافة أدوات 3D و CAD وتصدير PDF.",
-                            color = Color(0xFFFDE68A),
-                            fontSize = 11.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
-                }
-
                 if (errorMessage != null) {
                     Spacer(modifier = Modifier.height(14.dp))
                     Surface(
@@ -434,7 +361,7 @@ fun GoogleAuthGateScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(22.dp))
 
                 Button(
                     onClick = onSignInClick,
@@ -474,37 +401,6 @@ fun GoogleAuthGateScreen(
                             color = Color.White
                         )
                     }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OutlinedButton(
-                    onClick = onContinueWithoutAccount,
-                    enabled = !isLoading,
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.5.dp, Color(0xFF10B981)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color(0xFF064E3B).copy(alpha = 0.35f),
-                        contentColor = Color(0xFF6EE7B7)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("continue_without_account_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Architecture,
-                        contentDescription = null,
-                        tint = Color(0xFF34D399),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "الدخول بدون حساب (الوضع المحلي)",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = Color(0xFF6EE7B7)
-                    )
                 }
             }
         }
