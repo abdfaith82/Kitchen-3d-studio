@@ -42,6 +42,7 @@
 - `KitchenEditorViewModel.kt` — حوار جديد `CinematicPro` + ثلاث دوال: `applyGlobalKitchenStyle` و`applyCinematicTimeOfDay` و`setCameraPose` (كلها تعيد استخدام الأوامر القابلة للتراجع ومحاكاة الإضاءة الموجودة)
 - `KitchenStudioScreen.kt` — زر الاستوديو في الشريط العلوي + فرع الحوار
 - `app/build.gradle.kts` — الإصدار 1.0 ← 1.1 (versionCode 2)
+- v1.2 (versionCode 3): خيار **الدخول كضيف بدون حساب** في شاشة الدخول — يجرّب أولاً تسجيل الدخول المجهول في Firebase (فيُحفظ سحابياً تحت معرّف مجهول)، وإن لم يكن مفعّلاً في Firebase يدخل في وضع محلي (uid فارغ، حفظ على الجهاز فقط). زر Google يبقى كما هو للحفظ السحابي الدائم.
 
 ## البناء (من الهاتف — Termux)
 ```bash

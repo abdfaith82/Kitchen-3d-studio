@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Architecture
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.*
@@ -156,6 +157,23 @@ suspend fun signInWithGoogleButton(activityContext: Context, auth: FirebaseAuth)
     }
 }
 
+/**
+ * Guest sign-in: tries Firebase anonymous auth first, so the guest gets a
+ * real (anonymous) Firebase user and cloud save works under that uid
+ * (Firestore rules only require request.auth != null).
+ * Returns failure when anonymous auth is unavailable (e.g. not enabled in
+ * the Firebase console) — the caller then falls back to local guest mode.
+ */
+suspend fun signInAsGuest(auth: FirebaseAuth): Result<FirebaseUser?> {
+    return try {
+        val authResult = auth.signInAnonymously().await()
+        Result.success(authResult.user)
+    } catch (e: Exception) {
+        Log.w("Auth", "Anonymous sign-in failed", e)
+        Result.failure(e)
+    }
+}
+
 suspend fun signOutUser(context: Context, auth: FirebaseAuth) {
     auth.signOut()
     try {
@@ -206,6 +224,9 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     var isCheckingSilentAuth by remember { mutableStateOf(auth?.currentUser == null) }
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
+    // Local guest mode: entered without any Firebase user (anonymous auth
+    // unavailable). The studio runs with uid = null, i.e. local-only.
+    var isLocalGuest by remember { mutableStateOf(false) }
 
     LaunchedEffect(auth) {
         if (auth != null && auth.currentUser == null) {
@@ -229,11 +250,12 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     }
 
     val user = currentUser
-    if (user != null) {
-        key(user.uid) {
+    if (user != null || isLocalGuest) {
+        key(user?.uid ?: "local-guest") {
             KitchenStudioScreen(
                 viewModel = viewModel,
                 onSignOut = {
+                    isLocalGuest = false
                     scope.launch {
                         auth?.let { signOutUser(context, it) }
                     }
@@ -257,6 +279,23 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
                         }
                     }
                 }
+            },
+            onGuestClick = {
+                scope.launch {
+                    isSigningIn = true
+                    authErrorMessage = null
+                    var entered = false
+                    if (auth != null) {
+                        // Anonymous Firebase user: cloud save works under the
+                        // anonymous uid. The auth listener opens the studio.
+                        entered = signInAsGuest(auth).isSuccess
+                    }
+                    if (!entered) {
+                        // Anonymous auth unavailable: enter local-only.
+                        isLocalGuest = true
+                    }
+                    isSigningIn = false
+                }
             }
         )
     }
@@ -266,7 +305,8 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
 fun GoogleAuthGateScreen(
     isLoading: Boolean,
     errorMessage: String?,
-    onSignInClick: () -> Unit
+    onSignInClick: () -> Unit,
+    onGuestClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -416,6 +456,46 @@ fun GoogleAuthGateScreen(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Guest entry: no account needed. Tries Firebase anonymous
+                // auth first (cloud save under the anonymous uid); falls back
+                // to local-only mode when anonymous auth is unavailable.
+                OutlinedButton(
+                    onClick = onGuestClick,
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("guest_sign_in_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "الدخول كضيف بدون حساب",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color(0xFF38BDF8)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "كضيف تدخل فوراً بدون حساب، وتصاميمك تُحفظ على جهازك. سجّل بحساب Google لاحقاً للحفظ السحابي الدائم واسترجاع تصاميمك من أي جهاز.",
+                    fontSize = 12.sp,
+                    color = Color(0xFF94A3B8),
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }
